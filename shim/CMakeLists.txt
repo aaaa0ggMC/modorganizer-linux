@@ -2,7 +2,7 @@
 file(GLOB SHIM_SRC CONFIGURE_DEPENDS src/*.cpp)
 add_library(winshim SHARED ${SHIM_SRC})
 target_include_directories(winshim PUBLIC include)
-set_target_properties(winshim PROPERTIES POSITION_INDEPENDENT_CODE ON)
+set_target_properties(winshim PROPERTIES POSITION_INDEPENDENT_CODE ON CXX_EXTENSIONS OFF)  # gnu++ 会定义 unix/linux 宏
 
 if(NOT DEFINED MOL_SHIM_TESTS)
   set(MOL_SHIM_TESTS ON)
