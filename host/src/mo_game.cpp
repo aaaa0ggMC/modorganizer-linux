@@ -1,0 +1,148 @@
+#include "mo_game.h"
+
+#include <cstdlib>
+#include <cstring>
+#include <memory>
+
+#include <QCoreApplication>
+#include <QJsonArray>
+#include <QJsonDocument>
+#include <QJsonObject>
+
+#include <uibase/executableinfo.h>
+#include <uibase/game_features/dataarchives.h>
+#include <uibase/game_features/scriptextender.h>
+#include <uibase/log.h>
+
+#include "fake_organizer.hpp"
+#include "gameskyrimse.h"
+#include "winshim_internal.h"
+
+struct mo_game {
+    std::unique_ptr<mogame::Organizer> organizer;
+    std::unique_ptr<GameSkyrimSE> game;
+    QString gameDir;
+};
+
+namespace {
+
+char* dup_str(const QString& s) {
+    QByteArray b = s.toUtf8();
+    char* p = static_cast<char*>(std::malloc(b.size() + 1));
+    std::memcpy(p, b.constData(), b.size() + 1);
+    return p;
+}
+
+void set_err(char** err, const QString& msg) {
+    if (err) *err = dup_str(msg);
+}
+
+void ensure_qt() {
+    static int argc = 1;
+    static char arg0[] = "mo-linux";
+    static char* argv[] = {arg0, nullptr};
+    if (!QCoreApplication::instance()) {
+        new QCoreApplication(argc, argv);  // 进程内单例，随进程结束
+        QCoreApplication::setApplicationName("mo-linux");
+    }
+    static bool logged = false;
+    if (!logged) {
+        logged = true;
+        MOBase::log::LoggerConfiguration conf;
+        conf.name = "mo-game";
+        conf.maxLevel = MOBase::log::Levels::Warning;
+        MOBase::log::createDefault(conf);
+    }
+}
+
+QJsonArray to_json(const QStringList& l) {
+    QJsonArray a;
+    for (const auto& s : l) a.append(s);
+    return a;
+}
+
+}  // namespace
+
+extern "C" {
+
+mo_game* mo_game_create(const char* game_id, const char* game_dir, const char* wine_prefix,
+                        const char* wine_user, char** err) {
+    if (err) *err = nullptr;
+    if (!game_id || QString::fromUtf8(game_id) != "skyrimse") {
+        set_err(err, QStringLiteral("unsupported game id (only 'skyrimse')"));
+        return nullptr;
+    }
+    mol_shim_configure(wine_prefix, wine_user);
+    ensure_qt();
+    try {
+        auto g = std::make_unique<mo_game>();
+        mogame::OrganizerConfig cfg;
+        cfg.profileName = QStringLiteral("Default");
+        g->organizer = std::make_unique<mogame::Organizer>(cfg);
+        g->game = std::make_unique<GameSkyrimSE>();
+        g->organizer->setGame(g->game.get());
+        if (!g->game->init(g->organizer.get())) {
+            set_err(err, QStringLiteral("game plugin init failed"));
+            return nullptr;
+        }
+        if (game_dir && *game_dir) {
+            g->gameDir = QString::fromUtf8(game_dir);
+            g->game->setGamePath(g->gameDir);
+        }
+        return g.release();
+    } catch (const std::exception& e) {
+        set_err(err, QString::fromUtf8(e.what()));
+        return nullptr;
+    }
+}
+
+void mo_game_destroy(mo_game* g) { delete g; }
+
+char* mo_game_info_json(mo_game* g) {
+    if (!g) return nullptr;
+    MOBase::IPluginGame& game = *g->game;  // 经基类接口访问（GameSkyrimSE 把部分接口改为 protected）
+    QJsonObject o;
+    o["name"] = game.gameName();
+    o["shortName"] = game.gameShortName();
+    o["steamAppId"] = game.steamAPPId();
+    o["binaryName"] = game.binaryName();
+    o["launcherName"] = game.getLauncherName();
+    o["nexusGameId"] = game.nexusGameID();
+    o["gameDirectory"] = game.gameDirectory().absolutePath();
+    o["dataDirectory"] = game.dataDirectory().absolutePath();
+    o["documentsDirectory"] = game.documentsDirectory().absolutePath();
+    o["savesDirectory"] = game.savesDirectory().absolutePath();
+    o["installed"] = game.isInstalled();
+    o["looksValid"] = game.looksValid(game.gameDirectory());
+    o["version"] = game.gameVersion();
+    o["primaryPlugins"] = to_json(game.primaryPlugins());
+    o["dlcPlugins"] = to_json(game.DLCPlugins());
+    o["ccPlugins"] = to_json(game.CCPlugins());
+    o["iniFiles"] = to_json(game.iniFiles());
+    o["variants"] = to_json(game.gameVariants());
+    QJsonArray exes;
+    for (const auto& e : game.executables()) {
+        QJsonObject x;
+        x["title"] = e.title();
+        x["binary"] = e.binary().absoluteFilePath();
+        x["arguments"] = to_json(e.arguments());
+        x["workingDirectory"] = e.workingDirectory().absolutePath();
+        exes.append(x);
+    }
+    o["executables"] = exes;
+    if (auto se = g->organizer->gameFeatures()->gameFeature<MOBase::ScriptExtender>()) {
+        QJsonObject s;
+        s["name"] = se->BinaryName();
+        s["loader"] = se->loaderName();
+        s["loaderPath"] = se->loaderPath();
+        s["installed"] = se->isInstalled();
+        s["version"] = se->getExtenderVersion();
+        s["savegameExtension"] = se->savegameExtension();
+        o["scriptExtender"] = s;
+    }
+    return dup_str(QString::fromUtf8(QJsonDocument(o).toJson(QJsonDocument::Compact)));
+}
+
+void mo_free(char* p) { std::free(p); }
+
+}  // extern "C"

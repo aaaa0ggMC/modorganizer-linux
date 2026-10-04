@@ -10,5 +10,5 @@ INC="-I$B/ui -I$R/shim/include -I$B/alias -I$UI/include -I$UI/include/uibase -I$
  -I$GB/gamebryo -I$GB/creation -I$GB/games/skyrimse"
 python3 $R/scripts/gen_include_aliases.py $B/alias "$UI/src:$UI/include:$GB" "$R/shim/include:$UI/include:$UI/include/uibase:$UI/include/uibase/game_features:$GB/gamebryo:$GB/creation:$GB/games/skyrimse" >/dev/null
 for f in "$@"; do
-  ${CXX:-clang++} -std=c++2c -fms-extensions -include pch.h -fsyntax-only -fPIC -include winshim_prelude.h -DSPDLOG_USE_STD_FORMAT -DUIBASE_EXPORT -Wno-unknown-pragmas -w $QT $INC "$f" 2>&1 | grep -E "error|Error" | head -${MOL_N:-8}
+  ${CXX:-clang++} -std=c++2c -fms-extensions -fpermissive -include pch.h -fsyntax-only -fPIC -include winshim_prelude.h -DSPDLOG_USE_STD_FORMAT -DUIBASE_EXPORT -Wno-unknown-pragmas -w $QT $INC "$f" 2>&1 | grep -E "error|Error" | head -${MOL_N:-8}
 done

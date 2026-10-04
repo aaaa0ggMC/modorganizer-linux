@@ -15,7 +15,7 @@
 #endif
 
 // spdlog 的 wincolor sink 在 Linux 不存在：用 ansicolor sink 顶替（颜色参数忽略）。
-#if defined(__cplusplus) && __has_include(<spdlog/sinks/ansicolor_sink.h>)
+#if defined(MOL_SPDLOG_COMPAT) && defined(__cplusplus)
 #include <spdlog/sinks/ansicolor_sink.h>
 #include <mutex>
 namespace spdlog::sinks {
