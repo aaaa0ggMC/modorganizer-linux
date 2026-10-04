@@ -45,6 +45,9 @@ foreach(src ${TEST_SRC})
   target_include_directories(${name} PRIVATE tests)
   target_compile_options(${name} PRIVATE -Wall -Wextra)
   target_link_libraries(${name} PRIVATE mocore)
+  if(name MATCHES "^test_cli_")
+    target_link_libraries(${name} PRIVATE mol_alib6)   # CLI 层的测试会 import alib6
+  endif()
   add_test(NAME ${name} COMMAND ${name})
 endforeach()
 
