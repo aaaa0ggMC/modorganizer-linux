@@ -1,0 +1,44 @@
+# mo-linux CLI 规格
+
+无状态：状态只存在于磁盘（实例目录、农场目录）。变更类命令幂等（重复执行结果相同，第二次 `changed:false`）。
+
+## 全局选项
+| 选项 | 说明 |
+|---|---|
+| `-i, --instance DIR` | 实例目录；缺省取环境变量 `MOL_INSTANCE`，再缺省取当前目录 |
+| `-p, --profile NAME` | 覆盖实例配置里的 profile |
+| `-j, --json` | stdout 输出 JSON envelope（见下）；否则输出人类可读文本 |
+| `--events TARGET` | 进度事件（NDJSON）输出目标：`fd:N` \| `fifo:PATH` \| `unix:PATH` |
+| `-q, --quiet` | 不向 stderr 输出日志（默认只输出 warn 及以上） |
+
+## JSON envelope（stdout，仅 `--json` 时）
+```json
+{"schema_version":1,"ok":true,"command":"apply","data":{...},"warnings":[{"code":"..","message":"..","path":".."}],"errors":[]}
+```
+失败：`ok:false`，`data` 为 `null`，`errors:[{"code":"farm_not_owned","message":"…","path":"…"}]`（code 见 core/include/mol/error.hpp）。
+退出码：0 成功；1 运行期错误；2 用法错误（未知命令/缺参数，此时也输出 envelope，code=`invalid_argument`）；3 `status` 检测到漂移。
+日志一律走 stderr，stdout 只有结果。
+
+## 进度事件（`--events`）
+每行一个 JSON：`{"event":"progress","op":"apply","done":120,"total":5000}`；开始 `{"event":"start","op":"apply"}`；结束 `{"event":"done","op":"apply","ok":true}`。
+`progress` 至多每 50ms 或每 1% 发一次；对端关闭管道（EPIPE）时静默停止发送，命令照常完成。`fifo:`：不存在则 mkfifo，以非阻塞写打开，无读端则放弃（不阻塞命令）。`unix:`：connect 失败则放弃。`fd:`：直接 write。
+
+## 命令
+- `instance init --game-dir G --prefix P [--prefix-user U] [--runner proton|wine] [--proton-path X] [--steam-root S] [--profile N]`
+  data: `{"root":"…","changed":bool,"config":{…mo-linux.json 内容…}}`
+- `instance show`  data: `{"root","mods_dir","profiles_dir","downloads_dir","overwrite_dir","farm_path","config":{game,game_dir,prefix,prefix_user,profile,farm_dir,runner_kind,proton_path,steam_root}}`
+- `mods list`  data: `{"profile":"…","mods":[{"name","enabled","separator","exists","priority","path"}]}`（低→高优先级）
+- `mods enable NAME` / `mods disable NAME`  data: `{"name","enabled":bool,"changed":bool}`
+- `mods move NAME --to N`  data: `{"name","priority":N,"changed":bool}`
+- `conflicts [--mod NAME]`  data: `{"conflicts":[{"path","winner":"层名","losers":["层名"…]}],"count":N}`；`--mod` 只保留涉及该 mod 的条目。层名 = mod 名 / `<game>` / `<overwrite>`。
+- `plan`  只读。data: `{"ops":[{"kind":"mkdir|link|relink|remove|rmdir","path":"…","target":"…"}],"count":N,"counts":{"mkdir":n,"link":n,"relink":n,"remove":n,"rmdir":n},"warnings":N}`
+- `status`  只读。data: `{"in_sync":bool,"pending":N,"farm_path":"…","farm_exists":bool}`；`in_sync:false` 时退出码 3。
+- `apply`  构建期望树并物化农场；data: `{"applied":N,"changed":bool,"farm_path":"…"}`。发 `--events`。
+- `unlink`  删除农场（`remove_farm`）；data: `{"removed":bool,"farm_path":"…"}`；农场不存在 → `removed:false`（幂等，不是错误）。
+- `version`  data: `{"name":"mo-linux","version":"0.0.1"}`
+后续（不在本批）：`game info`、`plugins sync`、`run`、`doctor`。
+
+## 约定
+- 所有路径输出为绝对 Unix 路径，UTF-8。
+- 变更命令在 `--json` 与文本模式下的行为一致，仅输出格式不同。
+- 文本模式：一行摘要 + 必要的列表，面向人；不保证稳定，GUI 不得解析。
