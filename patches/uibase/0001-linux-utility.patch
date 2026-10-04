@@ -1,0 +1,34 @@
+diff -ruN a/src/utility.cpp b/src/utility.cpp
+--- a/src/utility.cpp
++++ b/src/utility.cpp
+@@ -817,7 +817,7 @@
+ 
+     if (FAILED(res)) {
+       log::error("failed to get known folder '{}', {}",
+-                 what.isEmpty() ? QUuid(id).toString() : what,
++                 what,
+                  formatSystemMessage(res));
+ 
+       throw std::runtime_error("couldn't get known folder path");
+@@ -927,18 +927,10 @@
+   }
+ }
+ 
+-QIcon iconForExecutable(const QString& filePath)
++QIcon iconForExecutable(const QString&)
+ {
+-  HICON winIcon;
+-  UINT res = ::ExtractIconExW(ToWString(filePath).c_str(), 0, &winIcon, nullptr, 1);
+-  if (res == 1) {
+-    QImage image = QImage::fromHICON(winIcon);
+-    QIcon result = QIcon(QPixmap::fromImage(image));
+-    ::DestroyIcon(winIcon);
+-    return result;
+-  } else {
+-    return QIcon(":/MO/gui/executable");
+-  }
++  // Linux: PE 图标提取不可用，返回通用图标
++  return QIcon(":/MO/gui/executable");
+ }
+ 
+ QString getFileVersion(QString const& filepath)

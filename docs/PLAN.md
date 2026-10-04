@@ -37,3 +37,12 @@ plan = diff(期望, 实际+manifest)；apply 后再 plan 必为空（幂等）�
 ## CLI JSON envelope
 `{"schema_version":1,"ok":bool,"command":"...","data":{...},"warnings":[...],"errors":[{"code","message","path"}]}`
 stdout 只放结果，日志走 stderr；退出码 0 成功 / 1 一般错误 / 2 用法错误 / 3 检测到漂移（status）。
+
+## 进度事件
+长操作（apply / install / run 前的准备）支持 `--events <target>`，输出 JSON Lines（NDJSON），
+每行一个事件：`{"event":"progress","op":"apply","done":120,"total":5000,"path":"..."}`，
+结束时 `{"event":"done"}`。target：
+- `fd:N`    写入已继承的文件描述符（GUI 作为父进程时最简单，推荐）
+- `fifo:P`  命名管道（不存在则创建，写端打开会阻塞到有读端；CLI 不负责删除）
+- `unix:P`  连接 GUI 监听的 unix domain socket
+最终结果仍只走 stdout 的 envelope；事件写失败（对端关闭）不应使命令失败，只静默停止发送。

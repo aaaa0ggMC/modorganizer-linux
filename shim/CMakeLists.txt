@@ -1,0 +1,14 @@
+# libwinshim.so：Windows API 的 Linux 实现（见 shim/include/*.h 的声明）。
+file(GLOB SHIM_SRC CONFIGURE_DEPENDS src/*.cpp)
+add_library(winshim SHARED ${SHIM_SRC})
+target_include_directories(winshim PUBLIC include)
+set_target_properties(winshim PROPERTIES POSITION_INDEPENDENT_CODE ON)
+
+file(GLOB SHIM_TEST_SRC CONFIGURE_DEPENDS tests/test_*.cpp)
+foreach(src ${SHIM_TEST_SRC})
+  get_filename_component(name ${src} NAME_WE)
+  add_executable(${name} ${src})
+  target_include_directories(${name} PRIVATE ${CMAKE_SOURCE_DIR}/tests)
+  target_link_libraries(${name} PRIVATE winshim)
+  add_test(NAME ${name} COMMAND ${name})
+endforeach()

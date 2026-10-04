@@ -25,3 +25,6 @@ foreach(src ${TEST_SRC})
   target_link_libraries(${name} PRIVATE mocore)
   add_test(NAME ${name} COMMAND ${name})
 endforeach()
+
+# ---- shim: Windows API 的 Linux 实现 ---------------------------------------
+add_subdirectory(shim)
