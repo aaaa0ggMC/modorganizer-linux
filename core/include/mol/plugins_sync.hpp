@@ -39,6 +39,13 @@ struct SyncReport {
 };
 
 // 失败 → Error{profile_not_found | game_unavailable | io_error}。
+// 除了上游 mappings() 里的 plugins.txt/loadorder.txt，还会按 MO2 的 profile 设置链接本地 ini 与存档目录：
+//   * profile 的 settings.ini 里 [General] LocalSettings=true → profile 目录里的 Skyrim.ini / SkyrimPrefs.ini / SkyrimCustom.ini（大小写不敏感）
+//     链接到前缀的 Documents/My Games/Skyrim Special Edition/（游戏写它们时写穿回 profile，与 MO2 的 usvfs 语义一致；
+//     目标处已有的真实 ini 先改名 .mol-backup）；
+//   * LocalSaves=true 且 profile 有 saves/ 目录 → 把前缀里的 Saves 链接过去。目标处已有**非空的真实目录**时不碰（只给 skipped 说明）。
 SyncReport sync_plugins(const Instance& inst, const Game& game, mr* mem = default_mr());
+// 只做 profile 本地 ini / 存档那部分（不需要游戏层；sync_plugins 内部也调用它）。结果追加到 rep。
+void sync_profile_settings(const Instance& inst, SyncReport& rep, mr* mem = default_mr());
 
 }  // namespace mol

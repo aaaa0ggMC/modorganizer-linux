@@ -1,6 +1,8 @@
+#include "mol/casefold.hpp"
 #include "mol/plugins_sync.hpp"
 
 #include <filesystem>
+#include <fstream>
 #include <string>
 #include <system_error>
 
@@ -14,6 +16,81 @@ namespace fs = std::filesystem;
     throw Error("io_error", "plugins sync: " + what + ": " + ec.message(), p.string());
 }
 }  // namespace
+
+namespace {
+std::string find_ci_name(const fs::path& dir, std::string_view want) {
+    std::error_code ec;
+    const auto w = casefold(want);
+    for (fs::directory_iterator it(dir, ec), end; !ec && it != end; it.increment(ec))
+        if (casefold(it->path().filename().string()) == w) return it->path().filename().string();
+    return {};
+}
+bool ini_true(const fs::path& settings, std::string_view key) {
+    std::ifstream in(settings);
+    std::string line;
+    bool in_general = false;
+    while (std::getline(in, line)) {
+        while (!line.empty() && (line.back() == '\r' || line.back() == ' ')) line.pop_back();
+        if (!line.empty() && line.front() == '[') { in_general = casefold(line) == "[general]"; continue; }
+        if (!in_general) continue;
+        const auto eq = line.find('=');
+        if (eq == std::string::npos || casefold(std::string_view(line).substr(0, eq)) != casefold(key)) continue;
+        const auto v = casefold(std::string_view(line).substr(eq + 1));
+        return v == "true" || v == "1";
+    }
+    return false;
+}
+}  // namespace
+
+void sync_profile_settings(const Instance& inst, SyncReport& rep, mr* mem) {
+    std::error_code ec;
+    const fs::path pdir = fs::path(std::string(inst.profiles_dir)) / std::string(inst.cfg.profile);
+    const fs::path settings = pdir / "settings.ini";
+    const fs::path docs = fs::path(std::string(inst.cfg.prefix)) / "drive_c/users" / std::string(inst.cfg.prefix_user) / "Documents/My Games/Skyrim Special Edition";
+    auto link_one = [&](const fs::path& src, const fs::path& dst, bool is_dir) {
+        SyncEntry e(mem);
+        e.source = string(src.string(), mem);
+        e.destination = string(dst.string(), mem);
+        const auto st = fs::symlink_status(dst, ec);
+        if (fs::is_symlink(st)) {
+            if (fs::read_symlink(dst, ec) == src) { e.action = "ok"; rep.entries.push_back(std::move(e)); return; }
+            fs::remove(dst, ec);
+            e.action = "relink";
+        } else if (fs::exists(st)) {
+            if (is_dir) {
+                std::error_code e2;
+                if (!fs::is_empty(dst, e2)) { e.action = "skip-existing-directory"; rep.entries.push_back(std::move(e)); return; }  // 绝不碰有内容的真实存档目录
+                fs::remove(dst, ec);
+                e.action = "link";
+            } else {
+                fs::path bak = dst;
+                bak += ".mol-backup";
+                if (fs::exists(fs::symlink_status(bak, ec))) throw Error("io_error", "plugins sync: backup already exists, refusing to overwrite", bak.string());
+                fs::rename(dst, bak, ec);
+                if (ec) io_fail("backup existing file", dst, ec);
+                e.action = "backup+link";
+            }
+        } else {
+            e.action = "link";
+        }
+        fs::create_directories(dst.parent_path(), ec);
+        fs::create_symlink(src, dst, ec);
+        if (ec) io_fail("create symlink", dst, ec);
+        rep.changed = true;
+        rep.entries.push_back(std::move(e));
+    };
+    if (ini_true(settings, "LocalSettings")) {
+        for (const char* nm : {"Skyrim.ini", "SkyrimPrefs.ini", "SkyrimCustom.ini"}) {
+            const std::string have = find_ci_name(pdir, nm);
+            if (have.empty()) continue;
+            // 目标沿用前缀里已有的大小写写法（游戏自己创建的是 Skyrim.ini / SkyrimPrefs.ini）
+            std::string target = find_ci_name(docs, nm);
+            if (target.empty()) target = nm;
+            link_one(pdir / have, docs / target, false);
+        }
+    }
+    if (ini_true(settings, "LocalSaves") && fs::is_directory(pdir / "saves", ec)) link_one(pdir / "saves", docs / "Saves", true);
+}
 
 SyncReport sync_plugins(const Instance& inst, const Game& game, mr* mem) {
     SyncReport rep(mem);
@@ -87,6 +164,7 @@ SyncReport sync_plugins(const Instance& inst, const Game& game, mr* mem) {
         rep.changed = true;
         rep.entries.push_back(std::move(e));
     }
+    sync_profile_settings(inst, rep, mem);
     return rep;
 }
 
