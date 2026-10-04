@@ -1,0 +1,139 @@
+#pragma once
+// Nexus Collections（集合/整合包）：解析 collection.json、确定安装顺序、驱动「下载 → 校验 → 安装 → 排序 → 插件」流水线。
+//
+// 清单格式取自 Vortex 的 ICollection（extensions/collections/types/ICollection.ts）：
+//   info{name,author,domainName,gameVersions,installInstructions}、mods[{name,version,optional,phase,source{type,modId,fileId,md5,
+//   fileSize,logicalFilename,url,instructions,tag},choices{type:"fomod",options:[{name,groups:[{name,choices:[{name,idx}]}]}]},patches}]、
+//   modRules[{type before|after|requires|conflicts|recommends, source, reference}]、plugins[{name,enabled}]、collectionConfig。
+//
+// 交互设计（mo-linux 不能在中途提问）：
+//   * 安装是**幂等、可续跑**的：状态写在 <实例>/collections/<slug>/state.json，每个 mod 处理完立刻落盘；
+//   * 遇到需要人介入的地方不阻塞、不猜测，而是把该 mod 记为 pending 并继续处理其它 mod，最后返回 status=incomplete + pending 列表；
+//     pending 的 kind：
+//       manual_download   免费账号/浏览器下载/手动来源：给出页面 URL 与说明；用户下载好后用 `collection resolve --archive/--nxm` 补上
+//       fomod_choices     压缩包有 FOMOD 但清单没有给出选择：用 `collection resolve --fomod FILE` 或 `--fomod-defaults` 补上
+//       unsupported       暂不支持的来源（bundle/带 patches 的 mod）：用 `resolve --skip` 跳过或自行提供压缩包
+//   * 用户用 resolve 记下决定（也存进 state.json），再次 `collection install` 即从中断处继续，已装好的 mod 不会重做。
+#include <functional>
+#include <map>
+#include <string>
+#include <string_view>
+#include <vector>
+
+#include "mol/fomod.hpp"
+#include "mol/instance.hpp"
+#include "mol/nexus.hpp"
+
+namespace mol::collection {
+
+struct Source {
+    std::string type;  // nexus | direct | browse | manual | bundle
+    std::int64_t mod_id = 0, file_id = 0, file_size = 0;
+    std::string md5, logical_filename, url, instructions, tag;
+};
+
+struct Mod {
+    std::string name, version, domain;
+    bool optional = false;
+    int phase = 0;
+    Source source;
+    bool has_choices = false;
+    fomod::Choices choices;   // 来自清单的 FOMOD 选择
+    bool has_patches = false; // 清单带二进制补丁（暂不支持）
+    std::string key() const { return source.tag.empty() ? name : source.tag; }  // 稳定标识（状态文件里的键）
+};
+
+struct RuleRef {
+    std::string md5, logical_name, file_expression, version_match;
+};
+struct Rule {
+    std::string type;  // before | after | requires | conflicts | recommends | provides
+    RuleRef source, reference;
+};
+
+struct PluginSpec {
+    std::string name;
+    bool enabled = true;
+};
+
+struct Info {
+    std::string name, author, domain, install_instructions;
+    std::vector<std::string> game_versions;
+};
+
+struct Collection {
+    Info info;
+    std::vector<Mod> mods;
+    std::vector<Rule> rules;
+    std::vector<PluginSpec> plugins;
+    bool has_plugins = false;
+};
+
+// 解析 collection.json 文本；结构不对 → Error{invalid_argument}。
+Collection parse_collection(std::string_view json);
+// {type:"fomod",options:[…]} → Choices；不是 fomod 类型返回空。
+fomod::Choices choices_from_vortex(std::string_view json_object);
+
+// 安装顺序（下标）：先按 phase 升序（稳定），再让 `after` 规则里的 source 排到 reference 之后、`before` 规则反之。
+// 规则成环时忽略造成环的那条（保持原序）。后面的 mod 优先级更高。
+std::vector<std::size_t> install_order(const Collection& c);
+
+// ---- 状态 ----------------------------------------------------------------------------
+struct ModState {
+    std::string name;     // 便于不读清单也能显示
+    std::string status;   // pending | installed | skipped | failed
+    std::string archive;  // 实际使用的压缩包路径
+    std::string mod_dir;  // mods/ 下的目录名
+    std::string note;     // failed 时的原因
+};
+struct Override {
+    bool skip = false;
+    bool fomod_defaults = false;
+    bool has_choices = false;
+    fomod::Choices choices;
+    std::string archive;  // 用户自己提供的压缩包
+};
+struct State {
+    std::string slug, name;
+    std::int64_t revision = 0;
+    std::map<std::string, ModState> mods;      // 键 = Mod::key()
+    std::map<std::string, Override> overrides;
+};
+
+std::string collection_dir(const Instance& inst, std::string_view slug);  // <实例>/collections/<slug>
+State load_state(const Instance& inst, std::string_view slug);            // 不存在 → 空 State
+void save_state(const Instance& inst, const State& s);
+
+// ---- 流水线 ---------------------------------------------------------------------------
+struct Pending {
+    std::string key, name, kind, detail, url;
+};
+struct ModOutcome {
+    std::string key, name, status, mod_dir, note;
+};
+struct Report {
+    std::vector<ModOutcome> mods;
+    std::vector<Pending> pending;
+    std::size_t installed = 0, skipped = 0, failed = 0;
+    bool complete() const { return pending.empty() && failed == 0; }
+    std::size_t plugins_applied = 0;
+    std::vector<std::string> notes;  // 非致命提示（规则、游戏版本不一致……）
+};
+
+struct InstallOptions {
+    std::string profile;             // 空 → 实例当前 profile
+    bool include_optional = true;
+    bool fomod_defaults = false;     // 清单没给选择的 FOMOD 一律用默认
+    // 进度回调：stage ∈ "download" | "install"；done/total 对 "download" 是字节，对 "install" 是 mod 序号。返回 false 中止（未实现取消时可忽略）。
+    std::function<void(std::string_view stage, std::string_view mod, std::uint64_t done, std::uint64_t total)> progress;
+};
+
+// client 为空（例如纯离线续跑）时，需要联网的 mod 一律 pending。
+// 返回的 State 已由本函数保存。
+Report install_collection(const Instance& inst, const NexusClient* client, const Collection& c, State& state,
+                          const InstallOptions& opt, std::string_view game_version = {});
+
+// 应用清单的插件列表到 profile 的 plugins.txt/loadorder.txt（只处理磁盘上存在的插件）。返回处理的插件数。
+std::size_t apply_plugin_spec(const Instance& inst, const Collection& c, std::string_view profile, std::span<const string> forced = {});
+
+}  // namespace mol::collection

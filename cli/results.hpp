@@ -253,6 +253,68 @@ struct PluginsListData {
     std::pmr::vector<MasterIssueRow> issues;
 };
 
+// ---- collection -------------------------------------------------------------
+struct CollectionModRow {
+    std::pmr::string key;
+    std::pmr::string name;
+    std::pmr::string version;
+    bool optional = false;
+    std::pmr::string source_type;
+    std::int64_t mod_id = 0;
+    std::int64_t file_id = 0;
+    bool has_fomod_choices = false;
+    bool has_patches = false;
+    std::pmr::string status;  // 无状态时为 "new"
+};
+struct CollectionInspectData {
+    std::pmr::string name;
+    std::pmr::string slug;
+    std::pmr::string author;
+    std::pmr::string domain;
+    std::int64_t revision = 0;
+    std::pmr::vector<std::pmr::string> game_versions;
+    std::pmr::string game_version;  // 本机游戏的版本（取不到为空）
+    std::int64_t mod_count = 0;
+    std::int64_t total_size = 0;
+    std::int64_t plugin_count = 0;
+    std::int64_t rule_count = 0;
+    std::pmr::string install_instructions;
+    std::pmr::vector<CollectionModRow> mods;  // 按安装顺序
+};
+struct CollectionOutcomeRow {
+    std::pmr::string key;
+    std::pmr::string name;
+    std::pmr::string status;  // installed|skipped|pending|failed
+    std::pmr::string mod_dir;
+    std::pmr::string note;
+};
+struct CollectionPendingRow {
+    std::pmr::string key;
+    std::pmr::string name;
+    std::pmr::string kind;  // manual_download|fomod_choices|unsupported
+    std::pmr::string detail;
+    std::pmr::string url;
+};
+struct CollectionInstallData {
+    std::pmr::string name;
+    std::pmr::string slug;
+    std::int64_t revision = 0;
+    std::pmr::string profile;
+    std::pmr::string status;  // complete|incomplete
+    std::int64_t installed = 0;
+    std::int64_t skipped = 0;
+    std::int64_t failed = 0;
+    std::int64_t plugins_applied = 0;
+    std::pmr::vector<CollectionOutcomeRow> mods;
+    std::pmr::vector<CollectionPendingRow> pending;
+    std::pmr::vector<std::pmr::string> notes;
+};
+struct CollectionResolveData {
+    std::pmr::string key;
+    std::pmr::string recorded;  // skip|fomod_choices|fomod_defaults|archive
+    std::pmr::string archive;
+};
+
 // ---- run --------------------------------------------------------------------
 struct RunData {
     std::pmr::string exe;

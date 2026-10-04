@@ -10,6 +10,7 @@
 
 #include <functional>
 #include <optional>
+#include <span>
 #include <vector>
 
 #include "mol/fomod.hpp"
@@ -57,6 +58,13 @@ InstallResult install_archive(const Instance& inst, std::string_view archive, co
 // 兼容旧调用：FOMOD 一律按 Raw 处理。
 InstallResult install_archive(const Instance& inst, std::string_view archive, std::string_view name = {},
                               bool force_root = false, std::string_view profile = {}, mr* mem = default_mr());
+
+// 把任意压缩包解到 dest（须存在）；用外部 7z/7zz/bsdtar；不做安全校验（调用方自行 validate）。失败 → Error{io_error}。
+void extract_archive(std::string_view archive, std::string_view dest);
+
+// 用 names（低→高优先级）重排 profile 的 modlist：先从列表里删掉这些名字，再按给定顺序追加到最高优先级处。
+// 不在 modlist 里的名字会被新增（启用）。其余条目保持相对顺序。
+void reorder_mods(const Instance& inst, std::span<const string> names_low_to_high, std::string_view profile = {});
 
 // FOMOD 的文件依赖求值：游戏 Data 或任一已启用 mod 里有该文件 → "Active"，否则 "Missing"。
 std::function<std::string(std::string_view)> fomod_file_state(const Instance& inst, std::string_view profile = {}, mr* mem = default_mr());

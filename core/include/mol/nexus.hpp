@@ -73,6 +73,24 @@ std::optional<string> load_nexus_key(mr* mem = default_mr());  // 环境变量�
 void save_nexus_key(std::string_view key);                     // 0600，原子写
 bool remove_nexus_key();                                       // 返回是否删除了文件
 
+struct NexusCollectionRev {
+    using allocator_type = mol::allocator_type;
+    string name, slug;
+    std::int64_t revision_number = 0;
+    std::int64_t mod_count = 0;
+    std::int64_t total_size = 0;
+    string download_path;  // 相对 API 根的路径，经 collection_archive_url 换成可下载地址
+    vector<string> game_versions;
+    bool adult = false;
+    explicit NexusCollectionRev(allocator_type a = {}) : name(a), slug(a), download_path(a), game_versions(a) {}
+    NexusCollectionRev(const NexusCollectionRev& o, allocator_type a) : name(o.name, a), slug(o.slug, a), revision_number(o.revision_number), mod_count(o.mod_count), total_size(o.total_size), download_path(o.download_path, a), game_versions(o.game_versions, a), adult(o.adult) {}
+    NexusCollectionRev(NexusCollectionRev&& o, allocator_type a) : name(std::move(o.name), a), slug(std::move(o.slug), a), revision_number(o.revision_number), mod_count(o.mod_count), total_size(o.total_size), download_path(std::move(o.download_path), a), game_versions(std::move(o.game_versions), a), adult(o.adult) {}
+    NexusCollectionRev(const NexusCollectionRev&) = default;
+    NexusCollectionRev(NexusCollectionRev&&) = default;
+    NexusCollectionRev& operator=(const NexusCollectionRev&) = default;
+    NexusCollectionRev& operator=(NexusCollectionRev&&) = default;
+};
+
 struct NexusDownload {
     using allocator_type = mol::allocator_type;
     string path;
@@ -97,11 +115,17 @@ public:
     // 返回首选 CDN 的下载 URL。免费用户必须带 nxm 的 key/expires，否则 Error{nexus_premium}。
     string download_url(std::string_view game_domain, std::int64_t mod_id, std::int64_t file_id,
                         const NxmUrl* nxm = nullptr, mr* mem = default_mr()) const;
+    // 集合（Collections）。revision==0 → 最新已发布版本。找不到 → Error{nexus_not_found}。
+    NexusCollectionRev collection_revision(std::string_view game_domain, std::string_view slug, std::int64_t revision = 0, mr* mem = default_mr()) const;
+    // 集合清单压缩包（含 collection.json）的下载地址（经 download_path 向 API 换取）。
+    string collection_archive_url(std::string_view download_path, mr* mem = default_mr()) const;
     // 带 apikey 等头的 GET（供测试/调用方复用）。status≥400 → 映射为带 code 的 Error。
     string get_json(std::string_view path_and_query, mr* mem = default_mr()) const;
 
 private:
-    string key_, version_, base_;
+    string get_root_json(std::string_view path_and_query, mr* mem) const;
+    string get_at(std::string_view base, std::string_view path_and_query, mr* mem) const;
+    string key_, version_, base_, root_;
 };
 
 // 下载 mod 文件到 downloads_dir：文件名取 Nexus 的 file_name；同名且大小等于 size_kb*1024 附近（±1KB）的已有文件直接复用。

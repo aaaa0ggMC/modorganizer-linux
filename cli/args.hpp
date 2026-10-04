@@ -93,6 +93,22 @@ constexpr OptionSpec kOptFomodInspect[] = {
 constexpr OptionSpec kOptPluginsMove[] = {
     {"to", "", "--to", "Target load-order position (0 = first)", true},
 };
+constexpr OptionSpec kOptCollectionInspect[] = {
+    {"revision", "", "--revision", "Collection revision number (default: latest published)", true},
+};
+constexpr OptionSpec kOptCollectionInstall[] = {
+    {"revision", "", "--revision", "Collection revision number (default: latest published)", true},
+    {"no-optional", "", "--no-optional", "Skip the collection's optional mods", false},
+    {"fomod-defaults", "", "--fomod-defaults", "Use FOMOD defaults where the collection gives no choices", false},
+};
+constexpr OptionSpec kOptCollectionResolve[] = {
+    {"mod", "", "--mod", "Mod key from the pending list (collection mod tag or name)", true},
+    {"skip", "", "--skip", "Do not install this mod", false},
+    {"fomod", "", "--fomod", "FOMOD choices JSON file for this mod", true},
+    {"fomod-defaults", "", "--fomod-defaults", "Install this mod's FOMOD with defaults", false},
+    {"archive", "", "--archive", "Use this archive file for the mod", true},
+    {"nxm", "", "--nxm", "nxm:// link (free Nexus accounts): downloads the file for this mod", true},
+};
 constexpr OptionSpec kOptConflicts[] = {
     {"mod", "", "--mod", "Only conflicts involving this mod", true},
 };

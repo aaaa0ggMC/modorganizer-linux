@@ -185,16 +185,22 @@ NexusClient::NexusClient(std::string_view api_key, std::string_view app_version,
         base_ = (e && *e) ? e : "https://api.nexusmods.com/v1";
     }
     while (!base_.empty() && base_.back() == '/') base_.pop_back();
+    root_ = base_;
+    if (root_.size() >= 3 && root_.compare(root_.size() - 3, 3, "/v1") == 0) root_.erase(root_.size() - 3);
 }
 
-string NexusClient::get_json(std::string_view pq, mr* mem) const {
+string NexusClient::get_root_json(std::string_view pq, mr* mem) const { return get_at(root_, pq, mem); }
+
+string NexusClient::get_json(std::string_view pq, mr* mem) const { return get_at(base_, pq, mem); }
+
+string NexusClient::get_at(std::string_view base, std::string_view pq, mr* mem) const {
     const std::vector<std::pair<std::string, std::string>> hdrs = {
         {"apikey", std::string(key_)},
         {"Application-Name", "mo-linux"},
         {"Application-Version", std::string(version_)},
         {"Accept", "application/json"},
     };
-    const std::string url = std::string(base_) + std::string(pq);
+    const std::string url = std::string(base) + std::string(pq);
     // 报错信息里不带 query（可能含 nxm key），也绝不带 apikey
     const std::string safe_path = std::string(pq.substr(0, pq.find('?')));
     HttpResponse r = http_get(url, hdrs, 30, mem);
@@ -206,6 +212,98 @@ string NexusClient::get_json(std::string_view pq, mr* mem) const {
         case 429: throw Error("nexus_rate_limited", "Nexus rate limit reached (429)" + (r.retry_after.empty() ? std::string() : "; retry after " + std::string(r.retry_after) + "s"), safe_path);
         default: throw Error("network_error", "Nexus returned HTTP " + std::to_string(r.status), safe_path);
     }
+}
+
+namespace {
+std::string json_escape(std::string_view in) {
+    std::string o;
+    for (unsigned char c : in) {
+        if (c == '"' || c == '\\') { o.push_back('\\'); o.push_back(static_cast<char>(c)); }
+        else if (c < 0x20) { static const char* hex = "0123456789abcdef"; o += "\\u00"; o.push_back(hex[c >> 4]); o.push_back(hex[c & 15]); }
+        else o.push_back(static_cast<char>(c));
+    }
+    return o;
+}
+}  // namespace
+
+NexusCollectionRev NexusClient::collection_revision(std::string_view domain, std::string_view slug, std::int64_t revision, mr* mem) const {
+    for (char c : slug)
+        if (!(std::isalnum(static_cast<unsigned char>(c)) || c == '-' || c == '_')) throw Error("invalid_argument", "bad collection slug: " + std::string(slug));
+    const std::string d = json_escape(domain), sl = json_escape(slug);
+    const char* fields = "revisionNumber modCount totalSize downloadLink adultContent gameVersions{reference}";
+    std::string query;
+    if (revision <= 0)
+        query = "{collection(slug:\"" + sl + "\",domainName:\"" + d + "\",viewAdultContent:true){name slug latestPublishedRevision{" + fields + "}}}";
+    else
+        query = "{collectionRevision(slug:\"" + sl + "\",revision:" + std::to_string(revision) + ",domainName:\"" + d +
+                "\",viewAdultContent:true){" + fields + " collection{name slug}}}";
+    const std::string body = "{\"query\":\"" + json_escape(query) + "\"}";
+    const std::vector<std::pair<std::string, std::string>> hdrs = {
+        {"apikey", std::string(key_)}, {"Application-Name", "mo-linux"}, {"Application-Version", std::string(version_)},
+        {"Content-Type", "application/json"}, {"Accept", "application/json"}};
+    HttpResponse r = http_post(root_ + "/v2/graphql", body, hdrs, 30, mem);
+    if (r.status == 401) throw Error("nexus_auth", "Nexus rejected the API key (401)");
+    if (r.status == 429) throw Error("nexus_rate_limited", "Nexus rate limit reached (429)");
+    if (r.status < 200 || r.status >= 300) throw Error("network_error", "Nexus GraphQL returned HTTP " + std::to_string(r.status));
+    alib6::AData doc(mem);
+    if (!doc.load_from_memory(r.body) || !doc.is_object()) bad_json("collection");
+    const auto& top = doc.object();
+    if (auto e = top.find("errors"); e != top.end() && e.second().is_array() && !e.second().array().empty()) {
+        std::string msg = "Nexus GraphQL error";
+        const auto& first = e.second().array()[0];
+        if (first.is_object()) if (auto m = str_of(first, "message"); !m.empty()) msg += ": " + m;
+        throw Error("nexus_not_found", msg + " (collection '" + std::string(slug) + "')");
+    }
+    auto data = top.find("data");
+    if (data == top.end() || !data.second().is_object()) bad_json("collection (no data)");
+    const alib6::AData* rev = nullptr;
+    std::string cname, cslug;
+    if (revision <= 0) {
+        auto c = data.second().object().find("collection");
+        if (c == data.second().object().end() || !c.second().is_object()) throw Error("nexus_not_found", "collection not found: " + std::string(slug));
+        cname = str_of(c.second(), "name");
+        cslug = str_of(c.second(), "slug");
+        auto lr = c.second().object().find("latestPublishedRevision");
+        if (lr == c.second().object().end() || !lr.second().is_object()) throw Error("nexus_not_found", "collection has no published revision: " + std::string(slug));
+        rev = &lr.second();
+    } else {
+        auto c = data.second().object().find("collectionRevision");
+        if (c == data.second().object().end() || !c.second().is_object()) throw Error("nexus_not_found", "collection revision not found: " + std::string(slug) + " r" + std::to_string(revision));
+        rev = &c.second();
+        if (auto cc = rev->object().find("collection"); cc != rev->object().end() && cc.second().is_object()) {
+            cname = str_of(cc.second(), "name");
+            cslug = str_of(cc.second(), "slug");
+        }
+    }
+    NexusCollectionRev out(mem);
+    out.name = string(cname, mem);
+    out.slug = string(cslug.empty() ? std::string(slug) : cslug, mem);
+    out.revision_number = int_of(*rev, "revisionNumber");
+    out.mod_count = int_of(*rev, "modCount");
+    {   // totalSize 是字符串形式的整数
+        const std::string ts = str_of(*rev, "totalSize");
+        std::int64_t v = 0;
+        for (char c : ts) { if (c < '0' || c > '9') { v = 0; break; } v = v * 10 + (c - '0'); }
+        out.total_size = ts.empty() ? int_of(*rev, "totalSize") : v;
+    }
+    out.download_path = string(str_of(*rev, "downloadLink"), mem);
+    out.adult = bool_of(*rev, "adultContent");
+    if (auto gv = rev->object().find("gameVersions"); gv != rev->object().end() && gv.second().is_array())
+        for (const auto& g : gv.second().array()) if (g.is_object()) out.game_versions.push_back(string(str_of(g, "reference"), mem));
+    if (out.download_path.empty()) throw Error("nexus_not_found", "the collection revision has no download link");
+    return out;
+}
+
+string NexusClient::collection_archive_url(std::string_view path, mr* mem) const {
+    if (path.empty() || path.front() != '/') throw Error("invalid_argument", "bad collection download path");
+    const string body = get_root_json(path, mem);
+    alib6::AData doc(mem);
+    if (!doc.load_from_memory(body) || !doc.is_object()) bad_json("collection download_link");
+    auto it = doc.object().find("download_links");
+    if (it == doc.object().end() || !it.second().is_array()) bad_json("collection download_link (links)");
+    for (const auto& l : it.second().array())
+        if (l.is_object()) if (auto u = str_of(l, "URI"); !u.empty()) return string(u, mem);
+    bad_json("collection download_link (empty)");
 }
 
 NexusUser NexusClient::validate(mr* mem) const {

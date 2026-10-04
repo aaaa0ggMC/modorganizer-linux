@@ -12,6 +12,7 @@
 #include <vector>
 
 #include "mol/casefold.hpp"
+#include "mol/mo2fmt.hpp"
 
 extern char** environ;
 
@@ -103,6 +104,28 @@ bool has_exe_or_dll(const fs::path& d) {
     return false;
 }
 
+// 与上游 SkyrimSEModDataChecker 一致（game_bethesda/src/games/skyrimse/skyrimsemoddatachecker.h）：
+// 顶层出现这些目录名之一，或带这些扩展名的文件，就认为这一层已经是 Data 根。
+bool looks_like_data_root(const fs::path& d) {
+    static const char* const folders[] = {"fonts", "interface", "menus", "meshes", "music", "scripts", "shaders", "sound", "strings", "textures",
+                                          "trees", "video", "facegen", "materials", "skse", "distantlod", "asi", "tools", "mcm", "distantland",
+                                          "mits", "dllplugins", "calientetools", "netscriptframework", "shadersfx", "nemesis_engine", "platform",
+                                          "grass", "lightplacer", "mainmenuwallpapers", "mainmenuvideo", "pbrmaterialobjects", "pbrnifpatcher",
+                                          "pbrtexturesets", "pandora_engine"};
+    static const char* const exts[] = {".esp", ".esm", ".esl", ".bsa", ".modgroups", ".ini"};
+    std::error_code ec;
+    for (const auto& c : children(d)) {
+        const auto name = casefold(c.filename().string());
+        if (fs::is_directory(c, ec)) {
+            for (const char* f : folders) if (name == f) return true;
+        } else {
+            const auto ext = casefold(c.extension().string());
+            for (const char* e : exts) if (ext == e) return true;
+        }
+    }
+    return false;
+}
+
 std::string sanitize(std::string s) {
     for (char& c : s)
         if (c == '/' || c == '\\' || c == ':' || c == '*' || c == '?' || c == '"' || c == '<' || c == '>' || c == '|' || c == '\0') c = '_';
@@ -144,6 +167,32 @@ std::function<std::string(std::string_view)> make_file_state(const Instance& ins
     };
 }
 }  // namespace
+
+void extract_archive(std::string_view archive, std::string_view dest) { extract(fs::path(std::string(archive)), fs::path(std::string(dest))); }
+
+void reorder_mods(const Instance& inst, std::span<const string> names, std::string_view profile) {
+    const std::string pname = profile.empty() ? std::string(inst.cfg.profile) : std::string(profile);
+    std::error_code ec;
+    fs::path pdir;
+    for (fs::directory_iterator it(fs::path(std::string(inst.profiles_dir)), ec), end; !ec && it != end; it.increment(ec))
+        if (casefold(it->path().filename().string()) == casefold(pname) && it->is_directory(ec)) { pdir = it->path(); break; }
+    if (pdir.empty()) throw Error("profile_not_found", "profile directory missing", (fs::path(std::string(inst.profiles_dir)) / pname).string());
+    const std::string file = (pdir / "modlist.txt").string();
+    auto entries = read_modlist(file);
+    std::vector<ModEntry> out;
+    auto is_named = [&](const ModEntry& e) {
+        for (const auto& n : names) if (casefold(n) == casefold(e.name)) return true;
+        return false;
+    };
+    for (auto& e : entries) if (!is_named(e)) out.push_back(std::move(e));
+    for (const auto& n : names) {
+        ModEntry e;
+        e.name.assign(n);
+        e.enabled = true;
+        out.push_back(std::move(e));
+    }
+    write_modlist(file, out);
+}
 
 std::function<std::string(std::string_view)> fomod_file_state(const Instance& inst, std::string_view profile, mr* mem) {
     return make_file_state(inst, profile, mem);
@@ -188,6 +237,7 @@ InstallResult install_archive(const Instance& inst, std::string_view archive_s, 
             auto kids = children(tmp);
             if (kids.size() != 1 || !fs::is_directory(kids[0], ec)) break;
             if (casefold(kids[0].filename().string()) == "data") break;  // Data 目录不是包装
+            if (looks_like_data_root(tmp)) break;                         // 唯一的目录本身就是游戏数据目录（如 SKSE/、Scripts/），不能当包装剥掉
             const fs::path inner = kids[0];
             const fs::path hop = tmp / ".mol-hop";
             fs::rename(inner, hop, ec);

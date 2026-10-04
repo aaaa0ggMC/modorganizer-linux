@@ -214,3 +214,24 @@ TEST(install_fomod_modes) {
     CHECK(fs::exists(t.dir / "inst/mods/RawMod/fomod/ModuleConfig.xml"));
     CHECK(fs::exists(t.dir / "inst/mods/RawMod/unselected_extra.txt"));
 }
+
+TEST(single_known_data_folder_is_not_stripped_as_a_wrapper) {
+    if (!have_zip_tool()) return;
+    Tmp t;
+    const Instance inst = make(t);
+    // 只有一个顶层目录 SKSE/（游戏数据目录）：必须原样保留
+    put(t.dir / "a/SKSE/Plugins/x.dll");
+    CHECK(zip_dir(t.dir / "a", t.dir / "skse_only.zip"));
+    install_archive(inst, (t.dir / "skse_only.zip").string(), "SkseOnly");
+    CHECK(fs::exists(t.dir / "inst/mods/SkseOnly/SKSE/Plugins/x.dll"));
+    // 真正的包装目录（名字不是游戏数据目录）仍然被剥掉
+    put(t.dir / "b/MyMod-1.2/meshes/m.nif");
+    CHECK(zip_dir(t.dir / "b", t.dir / "wrapped.zip"));
+    install_archive(inst, (t.dir / "wrapped.zip").string(), "Wrapped");
+    CHECK(fs::exists(t.dir / "inst/mods/Wrapped/meshes/m.nif"));
+    // 包装目录里再套一层游戏数据目录
+    put(t.dir / "c/Pack/SKSE/Plugins/y.dll");
+    CHECK(zip_dir(t.dir / "c", t.dir / "wrapped2.zip"));
+    install_archive(inst, (t.dir / "wrapped2.zip").string(), "Wrapped2");
+    CHECK(fs::exists(t.dir / "inst/mods/Wrapped2/SKSE/Plugins/y.dll"));
+}

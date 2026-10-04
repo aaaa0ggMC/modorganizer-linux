@@ -39,6 +39,12 @@
 | Nexus | `nexus login/logout/whoami/files/download` | libcurl；key 来自 `NEXUS_API_KEY` 或 `~/.config/mo-linux/nexus.key`(0600)，先验证再保存，永不进输出；断点续传；**已用真实 Premium 个人 key 跑通**（validate/files/download）。免费账号须 `--nxm` |
 | SKSE 一键 | `skse install` | 游戏版本→`skse64_a_b_c.dll`→Nexus 主文件(mod 30379)→装为 `SKSE64`→校验；幂等；**从零实例实测通过**（2.3.1 对应 1.7.104） |
 
+| Collections | `collection inspect/install/status/resolve` | **已用真实集合 xk05aw（Essential Mods for Skyrim，r325，60 个 mod、454MB、目标游戏 1.7.104.0）端到端跑通**：全部 60 个下载+md5 校验+安装（18 个 FOMOD 按清单选择，无需人工），16 个插件顺序/启用已应用，`doctor` 全绿、masters 满足；`run --skse` 后 SKSE 日志 **38 个插件 loaded correctly、0 disabled**（Address Library 生效，EngineFixes/PapyrusExtender/JContainers 等均加载） |
+
+**Collections 的交互设计**：不能中途提问 ⇒ 可续跑 + incomplete（退出码 4）。遇到需要人的 mod（`manual_download` 免费账号、`fomod_choices` 清单没给选择、`unsupported` 带 patches/bundle）只记 pending 并继续其它 mod；`collection resolve` 记下决定，再 `collection install` 续跑。详见 docs/CLI.md「Collections」。mock 集成测试覆盖：第一轮 1 装 2 挂起 → resolve → 离线第二轮全完成且不重复下载 → 第三轮幂等；md5 不符删文件并 failed。
+
+**用这个集合发现并修复的真实 bug**：①Nexus CDN 地址含空格（`I'm Talkin Here-….7z`），libcurl 报 "bad/illegal format"，13 个 mod 失败 → URL 统一百分号编码；②安装时把「唯一的顶层目录」一律当外壳剥掉，导致 `SKSE/Plugins/…`（如 Address Library）被剥成根文件、SKSE 插件全部 "address library needs to be updated" → 改为：顶层本身已是游戏数据目录（名单取自上游 SkyrimSEModDataChecker）就保留；两处都有回归测试。
+
 **实测结论**：旧的 SKSE 1.6.1170 确实因版本不匹配被加载器拒绝（"newer version of Skyrim than this version of SKSE64 supports"）；换成 Nexus 的 2.3.1 后 skse64.log 出现 `init complete`、`hooked dinput`。
 
 **本轮踩过的坑（防止复发）**
@@ -48,7 +54,7 @@
 - Nexus 的 CDN 下载 URL 末段现在是 UUID，文件名必须取 `files.json` 的 `file_name`。
 - 官方 API 政策（help.nexusmods.com/article/114）：个人 key 仅容许测试/个人使用；公开发布前须联系 support 注册应用拿 SSO slug；禁止冒充其它应用（含借用 MO2 的标识）、禁止用别的应用的 key。**不要用 MO2 的 SSO 标识。**
 
-**当前明确未做项**：Nexus SSO（需先注册应用）、Nexus Collections / Wabbajack 整合包导入、mod 之间的依赖图（Nexus Requirements）、LOOT 式排序、FOMOD 图片提取与 GUI 向导（CLI 侧接口已就绪）、mod 更新检查、固定 `third_party` 提交、LICENSE。真实的写穿符号链接限制见 R13。
+**当前明确未做项**：Nexus SSO（需先注册应用）、Wabbajack、Collections 的 bundle/patches 来源与 requires/conflicts 规则的强制执行、mod 之间的依赖图（Nexus Requirements）、LOOT 式排序、FOMOD 图片提取与 GUI 向导（CLI 侧接口已就绪）、mod 更新检查、固定 `third_party` 提交、LICENSE。真实的写穿符号链接限制见 R13。
 
 ## 1. 目标与边界
 

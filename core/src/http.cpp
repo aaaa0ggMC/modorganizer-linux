@@ -15,6 +15,22 @@ void global_init() {
     std::call_once(once, [] { curl_global_init(CURL_GLOBAL_DEFAULT); });
 }
 
+// 把 URL 里不合法的字符（空格、非 ASCII、引号等）做百分号编码；已有的 %XX 与保留字符原样保留。
+// Nexus 的 CDN 地址里会直接带空格（如 "I'm Talkin Here-93694.7z"），libcurl 会拒绝。
+std::string sanitize_url(std::string_view u) {
+    static const char* hex = "0123456789ABCDEF";
+    std::string o;
+    o.reserve(u.size() + 16);
+    for (unsigned char c : u) {
+        const bool bad = c <= 0x20 || c >= 0x7F || c == '"' || c == '<' || c == '>' || c == '\\' || c == '^' || c == '`' || c == '{' || c == '|' || c == '}';
+        if (!bad) { o.push_back(static_cast<char>(c)); continue; }
+        o.push_back('%');
+        o.push_back(hex[c >> 4]);
+        o.push_back(hex[c & 15]);
+    }
+    return o;
+}
+
 struct Easy {
     CURL* h;
     curl_slist* hdrs = nullptr;
@@ -28,7 +44,7 @@ struct Easy {
     Easy(const Easy&) = delete;
     Easy& operator=(const Easy&) = delete;
     void setup(std::string_view url, HttpHeaders headers, long timeout) {
-        const std::string u(url);
+        const std::string u = sanitize_url(url);
         curl_easy_setopt(h, CURLOPT_URL, u.c_str());
         curl_easy_setopt(h, CURLOPT_FOLLOWLOCATION, 1L);
         curl_easy_setopt(h, CURLOPT_MAXREDIRS, 8L);
@@ -94,6 +110,25 @@ HttpResponse http_get(std::string_view url, HttpHeaders headers, long timeout_se
     global_init();
     Easy e;
     e.setup(url, headers, timeout_sec);
+    HttpResponse r(mem);
+    curl_easy_setopt(e.h, CURLOPT_WRITEFUNCTION, write_body);
+    curl_easy_setopt(e.h, CURLOPT_WRITEDATA, &r.body);
+    curl_easy_setopt(e.h, CURLOPT_HEADERFUNCTION, read_header);
+    curl_easy_setopt(e.h, CURLOPT_HEADERDATA, &r.retry_after);
+    const CURLcode rc = curl_easy_perform(e.h);
+    if (rc != CURLE_OK) net_fail(rc, url);
+    curl_easy_getinfo(e.h, CURLINFO_RESPONSE_CODE, &r.status);
+    return r;
+}
+
+HttpResponse http_post(std::string_view url, std::string_view body, HttpHeaders headers, long timeout_sec, mr* mem) {
+    global_init();
+    Easy e;
+    e.setup(url, headers, timeout_sec);
+    const std::string payload(body);
+    curl_easy_setopt(e.h, CURLOPT_POST, 1L);
+    curl_easy_setopt(e.h, CURLOPT_POSTFIELDS, payload.c_str());
+    curl_easy_setopt(e.h, CURLOPT_POSTFIELDSIZE_LARGE, static_cast<curl_off_t>(payload.size()));
     HttpResponse r(mem);
     curl_easy_setopt(e.h, CURLOPT_WRITEFUNCTION, write_body);
     curl_easy_setopt(e.h, CURLOPT_WRITEDATA, &r.body);
