@@ -276,6 +276,8 @@ vector<ModInfo> list_mods(const Instance& inst, std::string_view profile, mr* me
             if (auto d = find_dir_ci(P(inst.mods_dir), e.name)) {
                 m.exists = true;
                 m.path.assign(d->string());
+                if (auto v = Ini::load(S((*d / "meta.ini").string()), mem).get("General", "mol_root", mem))
+                    m.root = (*v == "true" || *v == "1");
             }
         }
         out.push_back(std::move(m));
@@ -306,6 +308,51 @@ bool set_mod_enabled(const Instance& inst, std::string_view name, bool enabled, 
     return true;
 }
 
+void add_mod(const Instance& inst, std::string_view name, bool enabled, std::string_view profile) {
+    auto [file, mods] = load_modlist_for_edit(inst, profile);
+    for (const auto& m : mods)
+        if (ieq(m.name, name)) throw Error("invalid_argument", "mod already exists in modlist: " + S(name));
+    ModEntry e;
+    e.name.assign(name);
+    e.enabled = enabled;
+    mods.push_back(std::move(e));
+    write_modlist(file, mods);
+}
+
+void mark_mod_root(std::string_view mod_dir, bool root) {
+    const fs::path f = P(mod_dir) / "meta.ini";
+    std::string text = read_file(f);
+    // 保留原有内容，只替换/追加 mol_root 行；meta.ini 通常很小
+    std::string out;
+    bool in_general = false, done = false, saw_general = false;
+    std::size_t pos = 0;
+    const std::string line_new = std::string("mol_root=") + (root ? "true" : "false");
+    while (pos <= text.size()) {
+        std::size_t e = text.find('\n', pos);
+        const bool last = e == std::string::npos;
+        std::string line = text.substr(pos, last ? std::string::npos : e - pos);
+        std::string t = line;
+        while (!t.empty() && (t.back() == '\r' || t.back() == ' ')) t.pop_back();
+        if (!t.empty() && t.front() == '[') {
+            if (in_general && !done) { out += line_new + "\n"; done = true; }
+            in_general = ieq(t, "[General]");
+            saw_general = saw_general || in_general;
+        } else if (in_general && t.rfind("mol_root", 0) == 0 && t.find('=') != std::string::npos) {
+            line = line_new;
+            done = true;
+        }
+        if (!(last && line.empty())) out += line + (last ? "" : "\n");
+        if (last) break;
+        pos = e + 1;
+    }
+    if (!done) {
+        if (!out.empty() && out.back() != '\n') out += "\n";
+        if (!saw_general) out += "[General]\n";
+        out += line_new + "\n";
+    }
+    atomic_write(f, out);
+}
+
 bool move_mod(const Instance& inst, std::string_view name, std::size_t to_priority, std::string_view profile) {
     auto [file, mods] = load_modlist_for_edit(inst, profile);
     std::size_t i = find_mod(mods, name);
@@ -324,9 +371,14 @@ FarmModel build_farm_model(const Instance& inst, std::string_view profile, mr* m
 
     FarmModel model(mem);
     vector<vector<ScanEntry>> layers(mem);
-    auto add = [&](std::string_view name, std::string_view root, std::string_view prefix) {
+    auto add = [&](std::string_view name, std::string_view root, std::string_view prefix, bool is_mod = false) {
         model.layer_names.emplace_back(name);
-        layers.push_back(scan_layer(root, prefix, mem));
+        auto entries = scan_layer(root, prefix, mem);
+        if (is_mod) {  // mod 根下的 meta.ini 是 MO2/我们自己的元数据，不进农场
+            const std::string meta = prefix.empty() ? "meta.ini" : std::string(prefix) + "/meta.ini";
+            std::erase_if(entries, [&](const ScanEntry& e) { return !e.is_dir && ieq(e.rel, meta); });
+        }
+        layers.push_back(std::move(entries));
     };
     add("<game>", inst.cfg.game_dir, "");
     std::vector<Warning> pre;
@@ -339,7 +391,7 @@ FarmModel build_farm_model(const Instance& inst, std::string_view profile, mr* m
             pre.push_back(std::move(w));
             continue;
         }
-        add(m.name, m.path, "Data");
+        add(m.name, m.path, m.root ? "" : "Data", true);
     }
     if (is_dir(P(inst.overwrite_dir))) add("<overwrite>", inst.overwrite_dir, "Data");
 

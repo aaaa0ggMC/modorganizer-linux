@@ -3,9 +3,11 @@
 #include <iostream>
 #include <iterator>
 
+#include "mol/game_host.hpp"
 #include "mol/http.hpp"
 #include "mol/instance.hpp"
 #include "mol/nexus.hpp"
+#include "mol/skse.hpp"
 
 #include "commands.hpp"
 
@@ -138,25 +140,54 @@ Result run_nexus_download(Context& ctx) {
     if (sink != nullptr) sink->start("download");
     try {
         const mol::NexusClient client = make_client();
-        const mol::string url = client.download_url(domain, mod, fid, has_nxm ? &nxm : nullptr, ctx.mem);
-        std::string name = url_basename(url);
-        if (name.empty()) name = "nexus-" + std::to_string(mod) + "-" + std::to_string(fid) + ".bin";
-        const std::string dest = std::string(inst.downloads_dir) + "/" + name;
-        const std::uint64_t size = mol::http_download(url, dest, {}, [&](std::uint64_t done, std::uint64_t total) {
-            if (sink != nullptr && total > 0) sink->progress("download", done, total);
-            return true;
-        });
-        // MO2 兼容的 .meta，便于以后识别来源
-        {
-            std::ofstream meta(dest + ".meta", std::ios::binary | std::ios::trunc);
-            meta << "[General]\ngameName=" << std::string(domain) << "\nmodID=" << mod << "\nfileID=" << fid << "\nrepository=Nexus\n";
-        }
+        const auto dl = mol::nexus_download(client, inst.downloads_dir, domain, mod, fid, has_nxm ? &nxm : nullptr,
+                                            [&](std::uint64_t done, std::uint64_t total) {
+                                                if (sink != nullptr && total > 0) sink->progress("download", done, total);
+                                                return true;
+                                            }, ctx.mem);
+        const std::string dest(dl.path);
+        const std::uint64_t size = dl.size;
         Result r = ok_result(ctx);
         r.set_data(NexusDownloadData{.path = mol::string(dest, ctx.mem), .size = size, .game = domain, .mod_id = mod, .file_id = fid});
         if (sink != nullptr) sink->done("download", true);
         return r;
     } catch (...) {
         if (sink != nullptr) sink->done("download", false);
+        throw;
+    }
+}
+
+Result run_skse_install(Context& ctx) {
+    const auto inst = mol::load_instance(ctx.instance_dir, ctx.profile_override(), ctx.mem);
+    // 游戏版本只能来自游戏层（host 库）：没有它就没法选对 SKSE。
+    std::string version;
+    {
+        const auto host = mol::GameHost::open();
+        const auto game = host.create(inst.cfg.game, inst.cfg.game_dir, inst.cfg.prefix, inst.cfg.prefix_user);
+        alib6::AData info(ctx.mem);
+        if (info.load_from_memory(game.info_json(ctx.mem)) && info.is_object()) {
+            const auto& o = info.object();
+            if (auto it = o.find("version"); it != o.end())
+                if (auto v = it.second().try_to<std::string_view>()) version = std::string(*v);
+        }
+    }
+    if (version.empty()) throw mol::Error("game_unavailable", "cannot determine the game version");
+
+    EventSink* sink = ctx.sink;
+    if (sink != nullptr) sink->start("skse install");
+    try {
+        const mol::SkseResult res = mol::install_skse(inst, version, make_client(), [&](std::uint64_t done, std::uint64_t total) {
+            if (sink != nullptr && total > 0) sink->progress("download", done, total);
+            return true;
+        }, ctx.mem);
+        Result r = ok_result(ctx);
+        r.set_data(SkseInstallData{.game_version = mol::string(res.game_version, ctx.mem), .runtime_dll = mol::string(res.runtime_dll, ctx.mem),
+                                   .installed = res.installed, .mod_name = mol::string(res.mod_name, ctx.mem),
+                                   .file_name = mol::string(res.file_name, ctx.mem), .file_id = res.file_id, .downloaded = res.downloaded});
+        if (sink != nullptr) sink->done("skse install", true);
+        return r;
+    } catch (...) {
+        if (sink != nullptr) sink->done("skse install", false);
         throw;
     }
 }

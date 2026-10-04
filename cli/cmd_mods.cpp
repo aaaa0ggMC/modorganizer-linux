@@ -5,6 +5,7 @@
 
 #include "mol/casefold.hpp"
 #include "mol/instance.hpp"
+#include "mol/mod_install.hpp"
 
 #include "commands.hpp"
 
@@ -50,6 +51,7 @@ Result run_mods_list(Context& ctx) {
             .enabled = m.enabled,
             .separator = m.separator,
             .exists = m.exists,
+            .root = m.root,
             .priority = m.priority,
             .path = mol::string(m.path, ctx.mem),
         });
@@ -100,6 +102,22 @@ Result run_mods_disable(Context& ctx) {
         .enabled = false,
         .changed = changed,
     });
+    return r;
+}
+
+Result run_mods_install(Context& ctx) {
+    if (!ctx.args.ok()) return make_usage_error(ctx.args.error, ctx);
+    const mol::string archive = ctx.args.positionals.front();
+    const mol::string name = ctx.args.get("--name", "", ctx.mem);
+    const bool root = ctx.args.get_bool("--root", false);
+    const mol::Instance inst = mol::load_instance(ctx.instance_dir, ctx.profile_override(), ctx.mem);
+    const auto res = mol::install_archive(inst, archive, name, root, ctx.profile_override(), ctx.mem);
+    Result r(ctx.mem);
+    r.ok = true;
+    r.exit_code = 0;
+    r.command = ctx.command;
+    r.set_data(ModInstallData{.name = mol::string(res.name, ctx.mem), .path = mol::string(res.path, ctx.mem),
+                              .root = res.root, .files = res.files});
     return r;
 }
 

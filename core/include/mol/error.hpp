@@ -19,6 +19,7 @@ namespace mol {
 //   nexus_premium        该操作需要 Premium 或 nxm 链接里的 key（403）
 //   nexus_not_found      mod/文件不存在（404）
 //   nexus_rate_limited   触发 Nexus 限流（429）
+//   skse_mismatch        Nexus 上最新的 SKSE64 不支持当前游戏版本
 //   io_error             其它文件系统错误
 //   game_unavailable     libmo-game 未找到或初始化失败
 struct Error : std::runtime_error {

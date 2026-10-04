@@ -260,4 +260,51 @@ string NexusClient::download_url(std::string_view game, std::int64_t mod_id, std
     bad_json("download_link (empty)");
 }
 
+NexusDownload nexus_download(const NexusClient& client, std::string_view downloads_dir, std::string_view domain,
+                             std::int64_t mod, std::int64_t fid, const NxmUrl* nxm,
+                             const std::function<bool(std::uint64_t, std::uint64_t)>& progress, mr* mem) {
+    std::string name;
+    std::int64_t size_kb = 0;
+    try {
+        for (const auto& f : client.mod_files(domain, mod, mem))
+            if (f.file_id == fid) { name = std::string(f.file_name); size_kb = f.size_kb; break; }
+    } catch (const Error&) {
+    }
+    for (char& c : name) if (c == '/' || c == '\\' || c == '\0') c = '_';
+    while (!name.empty() && name.front() == '.') name.erase(name.begin());
+
+    NexusDownload out(mem);
+    if (!name.empty()) {
+        const fs::path dest = fs::path(std::string(downloads_dir)) / name;
+        std::error_code ec;
+        if (fs::is_regular_file(dest, ec) && size_kb > 0) {
+            const auto sz = static_cast<std::int64_t>(fs::file_size(dest, ec));
+            if (!ec && sz > 0 && std::llabs(sz - size_kb * 1024) <= 1024 + size_kb * 10) {  // size_kb 是四舍五入的 KB
+                out.path = string(dest.string(), mem);
+                out.size = static_cast<std::uint64_t>(sz);
+                out.reused = true;
+                return out;
+            }
+        }
+    }
+    const string url = client.download_url(domain, mod, fid, nxm, mem);
+    if (name.empty()) {
+        std::string_view p = url;
+        if (auto q = p.find_first_of("?#"); q != std::string_view::npos) p = p.substr(0, q);
+        if (auto sl = p.rfind('/'); sl != std::string_view::npos) p = p.substr(sl + 1);
+        name = pct_decode(p);
+        for (char& c : name) if (c == '/' || c == '\\' || c == '\0') c = '_';
+        while (!name.empty() && name.front() == '.') name.erase(name.begin());
+        if (name.empty()) name = "nexus-" + std::to_string(mod) + "-" + std::to_string(fid) + ".bin";
+    }
+    const std::string dest = (fs::path(std::string(downloads_dir)) / name).string();
+    out.size = http_download(url, dest, {}, progress);
+    out.path = string(dest, mem);
+    {
+        std::ofstream meta(dest + ".meta", std::ios::binary | std::ios::trunc);
+        meta << "[General]\ngameName=" << std::string(domain) << "\nmodID=" << mod << "\nfileID=" << fid << "\nrepository=Nexus\n";
+    }
+    return out;
+}
+
 }  // namespace mol

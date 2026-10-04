@@ -3,6 +3,7 @@
 // 鉴权：个人 API key（请求头 apikey）。key 来源：环境变量 NEXUS_API_KEY > ~/.config/mo-linux/nexus.key（0600）。
 // 基址可用环境变量 MOL_NEXUS_API 覆盖（测试用）。key 永远不进日志、不进 JSON 输出。
 #include <cstdint>
+#include <functional>
 #include <optional>
 #include <string_view>
 
@@ -72,6 +73,20 @@ std::optional<string> load_nexus_key(mr* mem = default_mr());  // 环境变量�
 void save_nexus_key(std::string_view key);                     // 0600，原子写
 bool remove_nexus_key();                                       // 返回是否删除了文件
 
+struct NexusDownload {
+    using allocator_type = mol::allocator_type;
+    string path;
+    std::uint64_t size = 0;
+    bool reused = false;  // 下载目录里已有同名且大小一致的文件，没有重新下载
+    explicit NexusDownload(allocator_type a = {}) : path(a) {}
+    NexusDownload(const NexusDownload& o, allocator_type a) : path(o.path, a), size(o.size), reused(o.reused) {}
+    NexusDownload(NexusDownload&& o, allocator_type a) : path(std::move(o.path), a), size(o.size), reused(o.reused) {}
+    NexusDownload(const NexusDownload&) = default;
+    NexusDownload(NexusDownload&&) = default;
+    NexusDownload& operator=(const NexusDownload&) = default;
+    NexusDownload& operator=(NexusDownload&&) = default;
+};
+
 class NexusClient {
 public:
     // base 空 → $MOL_NEXUS_API → 官方地址。
@@ -88,5 +103,11 @@ public:
 private:
     string key_, version_, base_;
 };
+
+// 下载 mod 文件到 downloads_dir：文件名取 Nexus 的 file_name；同名且大小等于 size_kb*1024 附近（±1KB）的已有文件直接复用。
+// 同时写 MO2 兼容的 <文件>.meta。progress 同 http_download。
+NexusDownload nexus_download(const NexusClient& client, std::string_view downloads_dir, std::string_view game_domain,
+                             std::int64_t mod_id, std::int64_t file_id, const NxmUrl* nxm = nullptr,
+                             const std::function<bool(std::uint64_t, std::uint64_t)>& progress = {}, mr* mem = default_mr());
 
 }  // namespace mol

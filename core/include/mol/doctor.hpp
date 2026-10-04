@@ -28,4 +28,7 @@ vector<Check> run_doctor(const Instance& inst, std::string_view game_version, mr
 // "skse64_<a>_<b>_<c>.dll"：由 "a.b.c.d" 推出的 SKSE 运行时 dll 名；格式不对返回空。
 string skse_dll_name(std::string_view game_version, mr* mem = default_mr());
 
+// 游戏目录或任一已启用的根目录型 mod 的顶层是否有该文件（大小写不敏感）。
+bool root_provides(const Instance& inst, std::string_view name, mr* mem = default_mr());
+
 }  // namespace mol

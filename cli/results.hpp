@@ -69,6 +69,7 @@ struct ModRow {
     bool enabled = false;
     bool separator = false;
     bool exists = false;
+    bool root = false;  // 根目录型 mod（映射到农场根而非 Data/）
     std::size_t priority = 0;
     std::pmr::string path;  // 分隔符为空
 };
@@ -88,6 +89,13 @@ struct ModMoveData {
     std::pmr::string name;
     std::size_t priority = 0;
     bool changed = false;
+};
+
+struct ModInstallData {
+    std::pmr::string name;
+    std::pmr::string path;
+    bool root = false;
+    std::size_t files = 0;
 };
 
 // ---- conflicts ------------------------------------------------------------
@@ -178,6 +186,16 @@ struct NexusDownloadData {
     std::pmr::string game;
     std::int64_t mod_id = 0;
     std::int64_t file_id = 0;
+};
+
+struct SkseInstallData {
+    std::pmr::string game_version;
+    std::pmr::string runtime_dll;
+    bool installed = false;
+    std::pmr::string mod_name;
+    std::pmr::string file_name;
+    std::int64_t file_id = 0;
+    bool downloaded = false;
 };
 
 // ---- run --------------------------------------------------------------------

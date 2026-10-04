@@ -80,6 +80,10 @@ constexpr OptionSpec kOptNexusDownload[] = {
     {"mod", "", "--mod", "Nexus mod id", true},
     {"file", "", "--file", "Nexus file id", true},
 };
+constexpr OptionSpec kOptModsInstall[] = {
+    {"name", "", "--name", "Mod name (default: archive file name)", true},
+    {"root", "", "--root", "Force root-style layout (mirrors the game directory)", false},
+};
 constexpr OptionSpec kOptConflicts[] = {
     {"mod", "", "--mod", "Only conflicts involving this mod", true},
 };

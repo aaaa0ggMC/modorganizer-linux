@@ -20,6 +20,21 @@ bool exists_ci(const fs::path& dir, std::string_view name) {
     return false;
 }
 
+// 游戏目录或任一已启用的「根目录型」mod 里是否有该文件（顶层，大小写不敏感）。
+bool provided_at_root(const Instance& inst, const fs::path& game, std::string_view name, mr* mem) {
+    if (exists_ci(game, name)) return true;
+    for (const auto& m : list_mods(inst, {}, mem))
+        if (m.enabled && m.exists && m.root && exists_ci(fs::path(std::string(m.path)), name)) return true;
+    return false;
+}
+
+}  // namespace
+
+bool root_provides(const Instance& inst, std::string_view name, mr* mem) {
+    return provided_at_root(inst, fs::path(std::string(inst.cfg.game_dir)), name, mem);
+}
+
+namespace {
 struct Sink {
     vector<Check>& out;
     mr* mem;
@@ -72,7 +87,7 @@ vector<Check> run_doctor(const Instance& inst, std::string_view game_version, mr
 
     // SKSE
     if (!game.empty() && fs::is_directory(game, ec)) {
-        const bool loader = exists_ci(game, "skse64_loader.exe");
+        const bool loader = provided_at_root(inst, game, "skse64_loader.exe", mem);
         if (!loader) {
             s.add("skse.loader", "warn", "SKSE64 is not installed (skse64_loader.exe missing)", "optional; needed by most script mods");
         } else if (game_version.empty()) {
@@ -80,7 +95,7 @@ vector<Check> run_doctor(const Instance& inst, std::string_view game_version, mr
         } else {
             const string dll = skse_dll_name(game_version);
             if (dll.empty()) s.add("skse.version", "warn", "cannot derive the SKSE runtime name from game version " + std::string(game_version));
-            else if (exists_ci(game, dll)) s.add("skse.version", "ok", "SKSE64 runtime " + std::string(dll) + " matches the game");
+            else if (provided_at_root(inst, game, dll, mem)) s.add("skse.version", "ok", "SKSE64 runtime " + std::string(dll) + " matches the game");
             else s.add("skse.version", "error", "SKSE64 does not match the game: " + std::string(dll) + " not found; the loader will refuse to start",
                        "install the SKSE64 build for game version " + std::string(game_version));
         }
