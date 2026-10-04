@@ -58,9 +58,10 @@ TEST(envelope_failure_has_null_data_and_errors) {
     r.add_error("farm_not_owned", "root is not empty", "/tmp/farm");
     const std::string out = serialize(r);
     CHECK_EQ(out,
+             // 键按字典序：code, hint, message, path；hint 取自错误码的默认建议
              std::string("{\"command\":\"apply\",\"data\":null,\"errors\":[{\"code\":"
-                         "\"farm_not_owned\",\"message\":\"root is not empty\",\"path\":"
-                         "\"/tmp/farm\"}],\"ok\":false,\"schema_version\":1,\"warnings\":[]}"));
+                         "\"farm_not_owned\",\"hint\":\"") + std::string(cli::default_hint("farm_not_owned")) +
+                 "\",\"message\":\"root is not empty\",\"path\":\"/tmp/farm\"}],\"ok\":false,\"schema_version\":1,\"warnings\":[]}");
 }
 
 TEST(envelope_warnings_are_serialized) {
@@ -71,7 +72,7 @@ TEST(envelope_warnings_are_serialized) {
     r.set_data(PlanData{});
     r.add_warning("merge_warning", "kind mismatch", "Data/a.dds");
     const std::string out = serialize(r);
-    CHECK(out.find("\"warnings\":[{\"code\":\"merge_warning\",\"message\":\"kind mismatch\",\"path\":"
+    CHECK(out.find("\"warnings\":[{\"code\":\"merge_warning\",\"hint\":\"\",\"message\":\"kind mismatch\",\"path\":"
                    "\"Data/a.dds\"}]") != std::string::npos);
     // ok=true 时 data 必须是对象（这里是空 plan）
     CHECK(out.find("\"data\":{") != std::string::npos);
