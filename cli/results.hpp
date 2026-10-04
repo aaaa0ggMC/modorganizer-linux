@@ -115,6 +115,17 @@ struct PluginsSyncData {
     std::pmr::vector<SyncRow> entries;
 };
 
+// ---- run --------------------------------------------------------------------
+struct RunData {
+    std::pmr::string exe;
+    bool dry_run = false;
+    bool synced_plugins = false;
+    int game_exit_code = 0;
+    std::size_t captured = 0;  // 移回 overwrite 的文件数（启动前残留 + 退出后）
+    std::pmr::vector<std::pmr::string> argv;
+    std::pmr::string cwd;
+};
+
 // ---- plan / status / apply / unlink ---------------------------------------
 struct OpCounts {
     std::size_t mkdir = 0;

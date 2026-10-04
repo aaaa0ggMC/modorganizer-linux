@@ -39,7 +39,9 @@
 - `version`  data: `{"name":"mo-linux","version":"0.0.1"}`
 - `plugins sync`  写 profile 与前缀 AppData（不启动游戏）。profile 无 plugins.txt 时先调用上游 `initializeProfile`；随后把上游 `mappings()` 物化为符号链接（目标处已有真实文件 → 改名 `.mol-backup`，已有备份则拒绝）。data：`{"profile","initialized_profile","changed","entries":[{"source","destination","action"}]}`，action ∈ `ok|link|relink|backup+link|skip-missing-source`。幂等。
 
-后续：`run`、`doctor`。
+- `run [--exe REL] [--skse] [--detach] [--dry-run]`  **会启动游戏**。流程：capture 上次残留的 overwrite → `plugins sync` → apply 农场 → `onAboutToRun` → `proton run`（默认阻塞到游戏退出；`--detach` 立即返回）→ 退出后把农场里的新真实文件移回 `overwrite/`（`Data/` 之外的进 `<实例>/overwrite-root/`）。`--dry-run` 只给出命令、不改任何东西。data：`{exe,dry_run,synced_plugins,game_exit_code,captured,argv,cwd}`。
+
+后续：`doctor`。
 
 ## 约定
 - 实例与游戏目录输出为绝对 Unix 路径，UTF-8；`plan.ops[].path` 与冲突 `path` 为相对农场根的路径，`plan.ops[].target` 为绝对源路径（无目标时为空）。

@@ -166,6 +166,15 @@ TEST(subcommand_option_inline_and_before_positional) {
     CHECK_EQ(std::string(c.args.get("--to", "", mem())), std::string("3"));
 }
 
+TEST(get_bool_switch_present_is_true) {
+    ParsedArgs a{mol::allocator_type(mem())};
+    a.options.emplace_back(mol::string("--dry-run", mem()), mol::string(mem()));  // 开关：存在即值为空
+    a.options.emplace_back(mol::string("--off", mem()), mol::string("false", mem()));
+    CHECK(a.get_bool("--dry-run", false));
+    CHECK(!a.get_bool("--off", true));
+    CHECK(!a.get_bool("--absent", false));
+}
+
 TEST(conflicts_mod_option) {
     const Capture c = run("conflicts", cli::kOptConflicts, {"conflicts", "--mod", "ModA"});
     CHECK(c.args.ok());

@@ -59,6 +59,12 @@ constexpr OptionSpec kOptInstanceInit[] = {
 constexpr OptionSpec kOptModsMove[] = {
     {"to", "", "--to", "Target priority index (0 = lowest)", true},
 };
+constexpr OptionSpec kOptRun[] = {
+    {"exe", "", "--exe", "Executable relative to the farm (default SkyrimSE.exe)", true},
+    {"skse", "", "--skse", "Run skse64_loader.exe", false},
+    {"detach", "", "--detach", "Return right after launching (do not wait; skips overwrite capture)", false},
+    {"dry-run", "", "--dry-run", "Print the launch command only; change nothing", false},
+};
 constexpr OptionSpec kOptConflicts[] = {
     {"mod", "", "--mod", "Only conflicts involving this mod", true},
 };

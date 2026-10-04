@@ -67,7 +67,7 @@ mol::string ParsedArgs::get(std::string_view name, std::string_view def, mol::mr
 
 bool ParsedArgs::get_bool(std::string_view name, bool def) const {
     for (const auto& [key, value] : options) {
-        if (key == name) return !value.empty() && value != "0" && value != "false";
+        if (key == name) return value != "0" && value != "false";  // 开关存在时值为空 ⇒ true
     }
     return def;
 }
