@@ -276,8 +276,13 @@ vector<ModInfo> list_mods(const Instance& inst, std::string_view profile, mr* me
             if (auto d = find_dir_ci(P(inst.mods_dir), e.name)) {
                 m.exists = true;
                 m.path.assign(d->string());
-                if (auto v = Ini::load(S((*d / "meta.ini").string()), mem).get("General", "mol_root", mem))
-                    m.root = (*v == "true" || *v == "1");
+                const Ini meta = Ini::load(S((*d / "meta.ini").string()), mem);
+                if (auto v = meta.get("General", "mol_root", mem)) m.root = (*v == "true" || *v == "1");
+                if (auto v = meta.get("General", "modid", mem)) {
+                    std::int64_t id = 0;
+                    for (char c : *v) { if (c < '0' || c > '9') { id = 0; break; } id = id * 10 + (c - '0'); }
+                    m.nexus_id = id;
+                }
             }
         }
         out.push_back(std::move(m));
@@ -319,16 +324,15 @@ void add_mod(const Instance& inst, std::string_view name, bool enabled, std::str
     write_modlist(file, mods);
 }
 
-void mark_mod_root(std::string_view mod_dir, bool root) {
+void set_mod_meta(std::string_view mod_dir, std::string_view key, std::string_view value) {
     const fs::path f = P(mod_dir) / "meta.ini";
-    std::string text = read_file(f);
-    // 保留原有内容，只替换/追加 mol_root 行；meta.ini 通常很小
+    const std::string text = read_file(f);
+    const std::string line_new = std::string(key) + "=" + std::string(value);
     std::string out;
     bool in_general = false, done = false, saw_general = false;
     std::size_t pos = 0;
-    const std::string line_new = std::string("mol_root=") + (root ? "true" : "false");
     while (pos <= text.size()) {
-        std::size_t e = text.find('\n', pos);
+        const std::size_t e = text.find('\n', pos);
         const bool last = e == std::string::npos;
         std::string line = text.substr(pos, last ? std::string::npos : e - pos);
         std::string t = line;
@@ -337,9 +341,12 @@ void mark_mod_root(std::string_view mod_dir, bool root) {
             if (in_general && !done) { out += line_new + "\n"; done = true; }
             in_general = ieq(t, "[General]");
             saw_general = saw_general || in_general;
-        } else if (in_general && t.rfind("mol_root", 0) == 0 && t.find('=') != std::string::npos) {
-            line = line_new;
-            done = true;
+        } else if (in_general && !done) {
+            const auto eq = t.find('=');
+            if (eq != std::string::npos && ieq(std::string_view(t).substr(0, eq), key)) {
+                line = line_new;
+                done = true;
+            }
         }
         if (!(last && line.empty())) out += line + (last ? "" : "\n");
         if (last) break;
@@ -352,6 +359,8 @@ void mark_mod_root(std::string_view mod_dir, bool root) {
     }
     atomic_write(f, out);
 }
+
+void mark_mod_root(std::string_view mod_dir, bool root) { set_mod_meta(mod_dir, "mol_root", root ? "true" : "false"); }
 
 bool move_mod(const Instance& inst, std::string_view name, std::size_t to_priority, std::string_view profile) {
     auto [file, mods] = load_modlist_for_edit(inst, profile);

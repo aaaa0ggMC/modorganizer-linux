@@ -493,6 +493,13 @@ Report install_collection(const Instance& inst, const NexusClient* client, const
             io.name = dir;
             // 之前中断留下的半成品（modlist 里没有但目录存在）：不处理，交给 install_archive 报错，避免误删
             const auto res = mol::install_archive(inst, archive, io);
+            if (m.source.type == "nexus" && m.source.mod_id > 0) {  // MO2 兼容的来源信息，供「已安装？」判断与更新检查使用
+                const std::string md = std::string(res.path);
+                set_mod_meta(md, "gameName", m.domain.empty() ? std::string(nexus_game_domain(inst.cfg.game)) : m.domain);
+                set_mod_meta(md, "modid", std::to_string(m.source.mod_id));
+                set_mod_meta(md, "fileid", std::to_string(m.source.file_id));
+                if (!m.version.empty()) set_mod_meta(md, "version", m.version);
+            }
             ms.status = "installed";
             ms.mod_dir = std::string(res.name);
             ms.note.clear();

@@ -53,6 +53,7 @@ Result run_mods_list(Context& ctx) {
             .separator = m.separator,
             .exists = m.exists,
             .root = m.root,
+            .nexus_id = m.nexus_id,
             .priority = m.priority,
             .path = mol::string(m.path, ctx.mem),
         });
@@ -106,20 +107,14 @@ Result run_mods_disable(Context& ctx) {
     return r;
 }
 
-Result run_mods_install(Context& ctx) {
-    if (!ctx.args.ok()) return make_usage_error(ctx.args.error, ctx);
-    const mol::string archive = ctx.args.positionals.front();
-    const mol::string name = ctx.args.get("--name", "", ctx.mem);
+mol::InstallOptions fomod_install_options(Context& ctx, const mol::Instance& inst, std::string_view name) {
     const mol::string fomod_file = ctx.args.get("--fomod", "", ctx.mem);
     const bool defaults = ctx.args.get_bool("--fomod-defaults", false);
     const bool raw = ctx.args.get_bool("--no-fomod", false);
     if ((!fomod_file.empty() ? 1 : 0) + (defaults ? 1 : 0) + (raw ? 1 : 0) > 1)
-        return make_usage_error("mods install: --fomod, --fomod-defaults and --no-fomod are mutually exclusive", ctx);
-    const mol::Instance inst = mol::load_instance(ctx.instance_dir, ctx.profile_override(), ctx.mem);
-
+        throw mol::Error("invalid_argument", "--fomod, --fomod-defaults and --no-fomod are mutually exclusive");
     mol::InstallOptions opt;
     opt.name = name;
-    opt.force_root = ctx.args.get_bool("--root", false);
     opt.profile = ctx.profile_override();
     if (raw) opt.fomod = mol::FomodMode::Raw;
     else if (defaults) opt.fomod = mol::FomodMode::Defaults;
@@ -135,6 +130,16 @@ Result run_mods_install(Context& ctx) {
         if (auto v = game_info_string(ctx, inst, "version"); !v.empty()) opt.fomod_env.game_version = v;
         if (auto v = game_info_string(ctx, inst, "scriptExtender", "version"); !v.empty()) opt.fomod_env.script_extender_version = v;
     }
+    return opt;
+}
+
+Result run_mods_install(Context& ctx) {
+    if (!ctx.args.ok()) return make_usage_error(ctx.args.error, ctx);
+    const mol::string archive = ctx.args.positionals.front();
+    const mol::string name = ctx.args.get("--name", "", ctx.mem);
+    const mol::Instance inst = mol::load_instance(ctx.instance_dir, ctx.profile_override(), ctx.mem);
+    mol::InstallOptions opt = fomod_install_options(ctx, inst, name);
+    opt.force_root = ctx.args.get_bool("--root", false);
 
     const auto res = mol::install_archive(inst, archive, opt, ctx.mem);
     ModInstallData d{.name = mol::string(res.name, ctx.mem), .path = mol::string(res.path, ctx.mem),

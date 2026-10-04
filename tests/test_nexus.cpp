@@ -184,3 +184,57 @@ TEST(urls_with_spaces_and_quotes_are_sanitized) {
     CHECK_EQ(r.status, 200L);
     CHECK_EQ(seen, std::string("/cdn/I'm%20Talkin%20Here-1.7z?expires=1&md5=a%2Bb"));  // 空格被编码，已有的 %2B 不被二次编码
 }
+
+TEST(graphql_search_info_and_collections) {
+    Mock srv([](const Req& r) -> Resp {
+        if (r.target != "/v2/graphql" || r.method != "POST") return {404, "{}", ""};
+        CHECK_EQ(r.h.at("apikey"), std::string("K"));
+        if (r.body.find("game(domainName") != std::string::npos) return {200, R"({"data":{"game":{"id":1704}}})", ""};
+        if (r.body.find("mods(filter") != std::string::npos)
+            return {200, R"({"data":{"mods":{"totalCount":"2","nodes":[
+              {"modId":12604,"name":"SkyUI","author":"Team","endorsements":5,"downloads":"99","summary":"ui","version":"6.9","updatedAt":"2026-01-01T00:00:00Z"},
+              {"modId":2,"name":"Other","author":"x","endorsements":1,"downloads":2,"summary":"","version":"1","updatedAt":""}]}}})", ""};
+        if (r.body.find("mod(modId") != std::string::npos)
+            return {200, R"({"data":{"mod":{"modId":"22825","name":"Wider MCM","author":"u","endorsements":3,"downloads":4,"summary":"s","version":"1.2","updatedAt":"",
+              "modCategory":{"name":"User Interface"},
+              "modRequirements":{"nexusRequirements":{"nodes":[{"modId":"12604","modName":"SkyUI","url":"","externalRequirement":false,"notes":""},
+                                                              {"modId":"0","modName":"Some Tool","url":"https://example.org","externalRequirement":true,"notes":"n"}]},
+                                 "dlcRequirements":[{"gameExpansion":{"name":"Dawnguard"}}]}}}})", ""};
+        if (r.body.find("collectionsV2") != std::string::npos)
+            return {200, R"({"data":{"collectionsV2":{"totalCount":7,"nodes":[{"slug":"abc","name":"Coll","summary":"sum","endorsements":9,"totalDownloads":100,
+              "latestPublishedRevision":{"revisionNumber":3,"modCount":60,"totalSize":"454"}}]}}})", ""};
+        return {200, R"({"errors":[{"message":"unexpected query"}]})", ""};
+    });
+    NexusClient c("K", "1", srv.base());
+    std::int64_t total = 0;
+    const auto mods = c.search_mods("skyrimspecialedition", "sky ui", "endorsements", 5, 0, &total);
+    CHECK_EQ(total, std::int64_t{2});
+    CHECK_EQ(mods.size(), std::size_t{2});
+    CHECK_EQ(mods[0].mod_id, 12604);
+    CHECK_EQ(mods[0].downloads, 99);  // 字符串形式的整数也能读
+    CHECK_EQ(std::string(mods[0].name), std::string("SkyUI"));
+    CHECK(srv.seen.back().body.find("nameStemmed:[{value:\\\"sky ui\\\"}]") != std::string::npos);  // 文本被正确转义进查询
+    CHECK(srv.seen.back().body.find("endorsements:{direction:DESC}") != std::string::npos);
+    CHECK_EQ(code_of([&] { c.search_mods("skyrimspecialedition", "x", "bogus", 5, 0); }), std::string("invalid_argument"));
+
+    const auto info = c.mod_info("skyrimspecialedition", 22825);
+    CHECK_EQ(info.summary.mod_id, 22825);
+    CHECK_EQ(std::string(info.category), std::string("User Interface"));
+    CHECK_EQ(info.requirements.size(), std::size_t{2});
+    CHECK_EQ(info.requirements[0].mod_id, 12604);
+    CHECK(!info.requirements[0].external);
+    CHECK(info.requirements[1].external);
+    CHECK_EQ(std::string(info.requirements[1].url), std::string("https://example.org"));
+    CHECK_EQ(info.dlc_requirements.size(), std::size_t{1});
+    CHECK_EQ(std::string(info.dlc_requirements[0]), std::string("Dawnguard"));
+
+    const auto cols = c.search_collections("skyrimspecialedition", "coll", "endorsements", 5, 0, &total);
+    CHECK_EQ(total, std::int64_t{7});
+    CHECK_EQ(cols.size(), std::size_t{1});
+    CHECK_EQ(std::string(cols[0].slug), std::string("abc"));
+    CHECK_EQ(cols[0].mod_count, 60);
+    CHECK_EQ(cols[0].total_size, 454);
+
+    // GraphQL 的 errors 字段被转成异常
+    CHECK_EQ(code_of([&] { c.graphql("{nothing}"); }), std::string("network_error"));
+}

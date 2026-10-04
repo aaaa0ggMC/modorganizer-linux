@@ -315,4 +315,24 @@ Result run_collection_resolve(Context& ctx) {
     return r;
 }
 
+Result run_collection_search(Context& ctx) {
+    if (!ctx.args.ok()) return make_usage_error(ctx.args.error, ctx);
+    std::int64_t count = 10, offset = 0;
+    if (ctx.args.has("--count") && !parse_int(ctx.args.get("--count", "", ctx.mem), count)) return make_usage_error("collection search: --count needs an integer", ctx);
+    if (ctx.args.has("--offset") && !parse_int(ctx.args.get("--offset", "", ctx.mem), offset)) return make_usage_error("collection search: --offset needs an integer", ctx);
+    const auto inst = mol::load_instance(ctx.instance_dir, ctx.profile_override(), ctx.mem);
+    const mol::string domain = mol::nexus_game_domain(inst.cfg.game, ctx.mem);
+    const mol::string sort = ctx.args.get("--sort", "endorsements", ctx.mem);
+    const mol::string query = ctx.args.positionals.front();
+    std::int64_t total = 0;
+    const auto found = make_client().search_collections(domain, query, sort, static_cast<int>(count), static_cast<int>(offset), &total, ctx.mem);
+    CollectionSearchData d{.game = domain, .query = query, .sort = sort, .total = total, .collections = std::pmr::vector<NexusCollectionRow>(ctx.mem)};
+    for (const auto& c : found)
+        d.collections.push_back(NexusCollectionRow{.slug = P(c.slug, ctx.mem), .name = P(c.name, ctx.mem), .summary = P(c.summary, ctx.mem), .endorsements = c.endorsements,
+                                                   .downloads = c.downloads, .revision = c.revision, .mod_count = c.mod_count, .total_size = c.total_size});
+    Result r = ok(ctx);
+    r.set_data(std::move(d));
+    return r;
+}
+
 }  // namespace cli

@@ -100,15 +100,16 @@ struct ModInfo {
     bool enabled = false;
     bool separator = false;
     bool exists = false;     // mods/<name> 目录是否存在（分隔符恒为 false）
+    std::int64_t nexus_id = 0;  // mods/<name>/meta.ini 的 [General] modid（MO2 兼容；0 = 未知）
     bool root = false;       // mods/<name>/meta.ini 的 [General] mol_root=true：目录结构镜像游戏根（映射到农场根而非 Data/）
     std::size_t priority = 0;  // 0 = 最低优先级（低→高序号）
     string path;               // 绝对路径（分隔符为空）
 
     explicit ModInfo(allocator_type a = {}) : name(a), path(a) {}
     ModInfo(const ModInfo& o, allocator_type a)
-        : name(o.name, a), enabled(o.enabled), separator(o.separator), exists(o.exists), root(o.root), priority(o.priority), path(o.path, a) {}
+        : name(o.name, a), enabled(o.enabled), separator(o.separator), exists(o.exists), nexus_id(o.nexus_id), root(o.root), priority(o.priority), path(o.path, a) {}
     ModInfo(ModInfo&& o, allocator_type a)
-        : name(std::move(o.name), a), enabled(o.enabled), separator(o.separator), exists(o.exists), root(o.root), priority(o.priority), path(std::move(o.path), a) {}
+        : name(std::move(o.name), a), enabled(o.enabled), separator(o.separator), exists(o.exists), nexus_id(o.nexus_id), root(o.root), priority(o.priority), path(std::move(o.path), a) {}
     ModInfo(const ModInfo&) = default;
     ModInfo(ModInfo&&) = default;
     ModInfo& operator=(const ModInfo&) = default;
@@ -122,6 +123,8 @@ vector<ModInfo> list_mods(const Instance& inst, std::string_view profile = {}, m
 void add_mod(const Instance& inst, std::string_view name, bool enabled, std::string_view profile = {});
 // 把 mod 目录标记为「根目录型」（写 meta.ini 的 mol_root=true，保留其它内容）。
 void mark_mod_root(std::string_view mod_dir, bool root);
+// 在 mods/<name>/meta.ini 的 [General] 里设置 key=value（保留其余内容；key 大小写不敏感匹配；原子写）。
+void set_mod_meta(std::string_view mod_dir, std::string_view key, std::string_view value);
 
 // 以下三个写 modlist.txt（原子）；返回 true 表示有变化，幂等。名字大小写不敏感匹配但以 modlist 中的原名为准。
 // 找不到 → Error{mod_not_found}；profile 目录不存在 → Error{profile_not_found}。

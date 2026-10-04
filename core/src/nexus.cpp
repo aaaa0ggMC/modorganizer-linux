@@ -4,6 +4,7 @@
 #include <sys/stat.h>
 #include <unistd.h>
 
+#include <algorithm>
 #include <cstdlib>
 #include <filesystem>
 #include <fstream>
@@ -226,6 +227,31 @@ std::string json_escape(std::string_view in) {
 }
 }  // namespace
 
+string NexusClient::graphql(std::string_view query, mr* mem) const {
+    const std::string body = "{\"query\":\"" + json_escape(query) + "\"}";
+    const std::vector<std::pair<std::string, std::string>> hdrs = {
+        {"apikey", std::string(key_)}, {"Application-Name", "mo-linux"}, {"Application-Version", std::string(version_)},
+        {"Content-Type", "application/json"}, {"Accept", "application/json"}};
+    HttpResponse r = http_post(root_ + "/v2/graphql", body, hdrs, 30, mem);
+    if (r.status == 401) throw Error("nexus_auth", "Nexus rejected the API key (401)");
+    if (r.status == 429) throw Error("nexus_rate_limited", "Nexus rate limit reached (429)" + (r.retry_after.empty() ? std::string() : "; retry after " + std::string(r.retry_after) + "s"));
+    if (r.status < 200 || r.status >= 300) throw Error("network_error", "Nexus GraphQL returned HTTP " + std::to_string(r.status));
+    {   // GraphQL 把错误放在 200 响应的 errors 字段里
+        alib6::AData doc(mem);
+        if (doc.load_from_memory(r.body) && doc.is_object()) {
+            const auto& top = doc.object();
+            if (auto e = top.find("errors"); e != top.end() && e.second().is_array() && !e.second().array().empty()) {
+                std::string msg = "Nexus GraphQL error";
+                const auto& first = e.second().array()[0];
+                if (first.is_object()) if (auto m = str_of(first, "message"); !m.empty()) msg += ": " + m;
+                const bool nf = msg.find("not found") != std::string::npos || msg.find("Not found") != std::string::npos;
+                throw Error(nf ? "nexus_not_found" : "network_error", msg);
+            }
+        }
+    }
+    return string(std::move(r.body), mem);
+}
+
 NexusCollectionRev NexusClient::collection_revision(std::string_view domain, std::string_view slug, std::int64_t revision, mr* mem) const {
     for (char c : slug)
         if (!(std::isalnum(static_cast<unsigned char>(c)) || c == '-' || c == '_')) throw Error("invalid_argument", "bad collection slug: " + std::string(slug));
@@ -237,23 +263,10 @@ NexusCollectionRev NexusClient::collection_revision(std::string_view domain, std
     else
         query = "{collectionRevision(slug:\"" + sl + "\",revision:" + std::to_string(revision) + ",domainName:\"" + d +
                 "\",viewAdultContent:true){" + fields + " collection{name slug}}}";
-    const std::string body = "{\"query\":\"" + json_escape(query) + "\"}";
-    const std::vector<std::pair<std::string, std::string>> hdrs = {
-        {"apikey", std::string(key_)}, {"Application-Name", "mo-linux"}, {"Application-Version", std::string(version_)},
-        {"Content-Type", "application/json"}, {"Accept", "application/json"}};
-    HttpResponse r = http_post(root_ + "/v2/graphql", body, hdrs, 30, mem);
-    if (r.status == 401) throw Error("nexus_auth", "Nexus rejected the API key (401)");
-    if (r.status == 429) throw Error("nexus_rate_limited", "Nexus rate limit reached (429)");
-    if (r.status < 200 || r.status >= 300) throw Error("network_error", "Nexus GraphQL returned HTTP " + std::to_string(r.status));
+    const string gbody = graphql(query, mem);
     alib6::AData doc(mem);
-    if (!doc.load_from_memory(r.body) || !doc.is_object()) bad_json("collection");
+    if (!doc.load_from_memory(gbody) || !doc.is_object()) bad_json("collection");
     const auto& top = doc.object();
-    if (auto e = top.find("errors"); e != top.end() && e.second().is_array() && !e.second().array().empty()) {
-        std::string msg = "Nexus GraphQL error";
-        const auto& first = e.second().array()[0];
-        if (first.is_object()) if (auto m = str_of(first, "message"); !m.empty()) msg += ": " + m;
-        throw Error("nexus_not_found", msg + " (collection '" + std::string(slug) + "')");
-    }
     auto data = top.find("data");
     if (data == top.end() || !data.second().is_object()) bad_json("collection (no data)");
     const alib6::AData* rev = nullptr;
@@ -304,6 +317,136 @@ string NexusClient::collection_archive_url(std::string_view path, mr* mem) const
     for (const auto& l : it.second().array())
         if (l.is_object()) if (auto u = str_of(l, "URI"); !u.empty()) return string(u, mem);
     bad_json("collection download_link (empty)");
+}
+
+namespace {
+std::int64_t to_int(std::string_view s) {
+    std::int64_t v = 0;
+    for (char c : s) { if (c < '0' || c > '9') return 0; v = v * 10 + (c - '0'); }
+    return v;
+}
+// GraphQL 里的 ID/大整数可能是字符串也可能是数字
+std::int64_t num_of(const alib6::AData& o, const char* k) {
+    if (!o.is_object()) return 0;
+    auto it = o.object().find(k);
+    if (it == o.object().end()) return 0;
+    if (auto v = it.second().try_to<long long>()) return *v;
+    if (auto sv = it.second().try_to<std::string_view>()) return to_int(*sv);
+    return 0;
+}
+const char* sort_field(std::string_view s) {
+    if (s.empty() || s == "relevance") return "relevance";
+    if (s == "endorsements") return "endorsements";
+    if (s == "downloads") return "downloads";
+    if (s == "updatedAt" || s == "updated") return "updatedAt";
+    throw Error("invalid_argument", "sort must be one of relevance|endorsements|downloads|updatedAt");
+}
+const alib6::AData* get_sub(const alib6::AData& o, const char* k) {
+    if (!o.is_object()) return nullptr;
+    auto it = o.object().find(k);
+    return it == o.object().end() ? nullptr : &it.second();
+}
+NexusModSummary parse_mod_summary(const alib6::AData& n, mr* mem) {
+    NexusModSummary m(mem);
+    m.mod_id = num_of(n, "modId");
+    m.name = string(str_of(n, "name"), mem);
+    m.author = string(str_of(n, "author"), mem);
+    m.summary = string(str_of(n, "summary"), mem);
+    m.version = string(str_of(n, "version"), mem);
+    m.updated_at = string(str_of(n, "updatedAt"), mem);
+    m.endorsements = num_of(n, "endorsements");
+    m.downloads = num_of(n, "downloads");
+    return m;
+}
+}  // namespace
+
+vector<NexusModSummary> NexusClient::search_mods(std::string_view domain, std::string_view text, std::string_view sort, int count, int offset, std::int64_t* total, mr* mem) const {
+    count = std::clamp(count, 1, 50);
+    offset = std::max(offset, 0);
+    const char* sf = sort_field(sort);
+    std::string filter = "gameDomainName:[{value:\"" + json_escape(domain) + "\"}]";
+    if (!text.empty()) filter += ",nameStemmed:[{value:\"" + json_escape(text) + "\"}]";
+    const std::string q = "{mods(filter:{" + filter + "},sort:[{" + sf + ":{direction:DESC}}],count:" + std::to_string(count) + ",offset:" + std::to_string(offset) +
+                          "){totalCount nodes{modId name author endorsements downloads summary version updatedAt}}}";
+    alib6::AData doc(mem);
+    if (!doc.load_from_memory(graphql(q, mem)) || !doc.is_object()) bad_json("search");
+    const auto* data = get_sub(doc, "data");
+    const auto* mods = data ? get_sub(*data, "mods") : nullptr;
+    vector<NexusModSummary> out(mem);
+    if (!mods) return out;
+    if (total) *total = num_of(*mods, "totalCount");
+    if (const auto* nodes = get_sub(*mods, "nodes"); nodes && nodes->is_array())
+        for (const auto& n : nodes->array()) out.push_back(parse_mod_summary(n, mem));
+    return out;
+}
+
+NexusModInfo NexusClient::mod_info(std::string_view domain, std::int64_t mod_id, mr* mem) const {
+    // gameId：先按域名查
+    alib6::AData gdoc(mem);
+    if (!gdoc.load_from_memory(graphql("{game(domainName:\"" + json_escape(domain) + "\"){id}}", mem))) bad_json("game");
+    std::int64_t gid = 0;
+    if (const auto* d = get_sub(gdoc, "data")) if (const auto* g = get_sub(*d, "game")) gid = num_of(*g, "id");
+    if (gid == 0) throw Error("nexus_not_found", "unknown game domain: " + std::string(domain));
+    const std::string q = "{mod(modId:\"" + std::to_string(mod_id) + "\",gameId:\"" + std::to_string(gid) +
+                          "\"){modId name author endorsements downloads summary version updatedAt modCategory{name} modRequirements{nexusRequirements{nodes{modId modName url externalRequirement notes}} dlcRequirements{gameExpansion{name}}}}}";
+    alib6::AData doc(mem);
+    if (!doc.load_from_memory(graphql(q, mem)) || !doc.is_object()) bad_json("mod");
+    const auto* data = get_sub(doc, "data");
+    const auto* mod = data ? get_sub(*data, "mod") : nullptr;
+    if (!mod || !mod->is_object()) throw Error("nexus_not_found", "mod " + std::to_string(mod_id) + " not found on Nexus (" + std::string(domain) + ")");
+    NexusModInfo info(mem);
+    info.summary = parse_mod_summary(*mod, mem);
+    if (const auto* c = get_sub(*mod, "modCategory")) info.category = string(str_of(*c, "name"), mem);
+    if (const auto* rq = get_sub(*mod, "modRequirements")) {
+        if (const auto* nr = get_sub(*rq, "nexusRequirements"))
+            if (const auto* nodes = get_sub(*nr, "nodes"); nodes && nodes->is_array())
+                for (const auto& n : nodes->array()) {
+                    NexusRequirement r(mem);
+                    r.mod_id = num_of(n, "modId");
+                    r.name = string(str_of(n, "modName"), mem);
+                    r.url = string(str_of(n, "url"), mem);
+                    r.notes = string(str_of(n, "notes"), mem);
+                    r.external = bool_of(n, "externalRequirement");
+                    info.requirements.push_back(std::move(r));
+                }
+        if (const auto* dl = get_sub(*rq, "dlcRequirements"); dl && dl->is_array())
+            for (const auto& d : dl->array())
+                if (const auto* ge = get_sub(d, "gameExpansion")) info.dlc_requirements.push_back(string(str_of(*ge, "name"), mem));
+    }
+    return info;
+}
+
+vector<NexusCollectionSummary> NexusClient::search_collections(std::string_view domain, std::string_view text, std::string_view sort, int count, int offset, std::int64_t* total, mr* mem) const {
+    count = std::clamp(count, 1, 50);
+    offset = std::max(offset, 0);
+    const char* sf = sort_field(sort);
+    std::string filter = "gameDomain:[{value:\"" + json_escape(domain) + "\"}]";
+    if (!text.empty()) filter += ",name:[{value:\"" + json_escape(text) + "\",op:WILDCARD}]";
+    const std::string q = "{collectionsV2(filter:{" + filter + "},sort:{" + sf + ":{direction:DESC}},count:" + std::to_string(count) + ",offset:" + std::to_string(offset) +
+                          "){totalCount nodes{slug name summary endorsements totalDownloads latestPublishedRevision{revisionNumber modCount totalSize}}}}";
+    alib6::AData doc(mem);
+    if (!doc.load_from_memory(graphql(q, mem)) || !doc.is_object()) bad_json("collection search");
+    const auto* data = get_sub(doc, "data");
+    const auto* cs = data ? get_sub(*data, "collectionsV2") : nullptr;
+    vector<NexusCollectionSummary> out(mem);
+    if (!cs) return out;
+    if (total) *total = num_of(*cs, "totalCount");
+    if (const auto* nodes = get_sub(*cs, "nodes"); nodes && nodes->is_array())
+        for (const auto& n : nodes->array()) {
+            NexusCollectionSummary c(mem);
+            c.slug = string(str_of(n, "slug"), mem);
+            c.name = string(str_of(n, "name"), mem);
+            c.summary = string(str_of(n, "summary"), mem);
+            c.endorsements = num_of(n, "endorsements");
+            c.downloads = num_of(n, "totalDownloads");
+            if (const auto* r = get_sub(n, "latestPublishedRevision")) {
+                c.revision = num_of(*r, "revisionNumber");
+                c.mod_count = num_of(*r, "modCount");
+                c.total_size = num_of(*r, "totalSize");
+            }
+            out.push_back(std::move(c));
+        }
+    return out;
 }
 
 NexusUser NexusClient::validate(mr* mem) const {

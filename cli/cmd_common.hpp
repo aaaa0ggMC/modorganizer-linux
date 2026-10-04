@@ -22,6 +22,7 @@
 #include "results.hpp"
 #include "mol/error.hpp"
 #include "mol/instance.hpp"
+#include "mol/mod_install.hpp"
 
 // 见文件头的混用约束：import 放在所有 #include 之后。
 import alib6;
@@ -103,6 +104,9 @@ using CommandFn = Result (*)(Context&);
 // ---- 结果构造 --------------------------------------------------------------
 Result make_ok(Context& ctx);                                            // data=空对象
 Result make_usage_error(std::string_view message, Context& ctx);
+// 从 --fomod / --fomod-defaults / --no-fomod 构造安装选项（三者互斥，否则 Error{invalid_argument}）。
+// 选择了 Defaults/Choices 时顺带填好 FOMOD 条件求值要用的游戏版本与脚本扩展版本。
+mol::InstallOptions fomod_install_options(Context& ctx, const mol::Instance& inst, std::string_view name);
 // 游戏层 info 里的字符串字段（sub_key 非空则取其子对象里的字段）；host 缺失/字段缺失返回空串。
 std::string game_info_string(Context& ctx, const mol::Instance& inst, std::string_view key, std::string_view sub_key = {});
 // 游戏层 info 里的字符串数组字段；取不到返回空。

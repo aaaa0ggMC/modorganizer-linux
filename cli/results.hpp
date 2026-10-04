@@ -70,6 +70,7 @@ struct ModRow {
     bool separator = false;
     bool exists = false;
     bool root = false;  // 根目录型 mod（映射到农场根而非 Data/）
+    std::int64_t nexus_id = 0;  // meta.ini 的 modid（0=未知）
     std::size_t priority = 0;
     std::pmr::string path;  // 分隔符为空
 };
@@ -313,6 +314,70 @@ struct CollectionResolveData {
     std::pmr::string key;
     std::pmr::string recorded;  // skip|fomod_choices|fomod_defaults|archive
     std::pmr::string archive;
+};
+
+struct NexusModRow {
+    std::int64_t mod_id = 0;
+    std::pmr::string name;
+    std::pmr::string author;
+    std::pmr::string summary;
+    std::pmr::string version;
+    std::pmr::string updated_at;
+    std::int64_t endorsements = 0;
+    std::int64_t downloads = 0;
+    bool installed = false;  // 本实例里已有来自该 mod 的安装
+};
+struct NexusSearchData {
+    std::pmr::string game;
+    std::pmr::string query;
+    std::pmr::string sort;
+    std::int64_t total = 0;
+    std::pmr::vector<NexusModRow> mods;
+};
+struct NexusRequirementRow {
+    std::int64_t mod_id = 0;
+    std::pmr::string name;
+    bool external = false;
+    std::pmr::string url;
+    std::pmr::string notes;
+    bool installed = false;
+};
+struct NexusInfoData {
+    NexusModRow mod;
+    std::pmr::string category;
+    std::pmr::vector<NexusRequirementRow> requirements;
+    std::pmr::vector<std::pmr::string> dlc_requirements;
+};
+struct NexusCollectionRow {
+    std::pmr::string slug;
+    std::pmr::string name;
+    std::pmr::string summary;
+    std::int64_t endorsements = 0;
+    std::int64_t downloads = 0;
+    std::int64_t revision = 0;
+    std::int64_t mod_count = 0;
+    std::int64_t total_size = 0;
+};
+struct CollectionSearchData {
+    std::pmr::string game;
+    std::pmr::string query;
+    std::pmr::string sort;
+    std::int64_t total = 0;
+    std::pmr::vector<NexusCollectionRow> collections;
+};
+struct NexusInstalledRow {
+    std::int64_t mod_id = 0;
+    std::pmr::string name;
+    std::pmr::string status;  // installed|already_installed|pending|failed
+    std::pmr::string mod_dir;
+    std::pmr::string note;
+};
+struct NexusInstallData {
+    std::pmr::string status;  // complete|incomplete
+    std::pmr::vector<NexusInstalledRow> mods;       // 本次涉及的 mod（含自动装的前置）
+    std::pmr::vector<CollectionPendingRow> pending; // 需要人介入的项（kind 同 collection）
+    std::pmr::vector<NexusRequirementRow> external_requirements;
+    std::pmr::vector<std::pmr::string> dlc_requirements;
 };
 
 // ---- run --------------------------------------------------------------------

@@ -91,6 +91,62 @@ struct NexusCollectionRev {
     NexusCollectionRev& operator=(NexusCollectionRev&&) = default;
 };
 
+struct NexusModSummary {
+    using allocator_type = mol::allocator_type;
+    std::int64_t mod_id = 0;
+    string name, author, summary, version, updated_at;
+    std::int64_t endorsements = 0, downloads = 0;
+    explicit NexusModSummary(allocator_type a = {}) : name(a), author(a), summary(a), version(a), updated_at(a) {}
+    NexusModSummary(const NexusModSummary& o, allocator_type a) : mod_id(o.mod_id), name(o.name, a), author(o.author, a), summary(o.summary, a), version(o.version, a), updated_at(o.updated_at, a), endorsements(o.endorsements), downloads(o.downloads) {}
+    NexusModSummary(NexusModSummary&& o, allocator_type a) : mod_id(o.mod_id), name(std::move(o.name), a), author(std::move(o.author), a), summary(std::move(o.summary), a), version(std::move(o.version), a), updated_at(std::move(o.updated_at), a), endorsements(o.endorsements), downloads(o.downloads) {}
+    NexusModSummary(const NexusModSummary&) = default;
+    NexusModSummary(NexusModSummary&&) = default;
+    NexusModSummary& operator=(const NexusModSummary&) = default;
+    NexusModSummary& operator=(NexusModSummary&&) = default;
+};
+
+struct NexusRequirement {
+    using allocator_type = mol::allocator_type;
+    std::int64_t mod_id = 0;  // 站内 mod；外部需求为 0
+    string name, url, notes;
+    bool external = false;
+    explicit NexusRequirement(allocator_type a = {}) : name(a), url(a), notes(a) {}
+    NexusRequirement(const NexusRequirement& o, allocator_type a) : mod_id(o.mod_id), name(o.name, a), url(o.url, a), notes(o.notes, a), external(o.external) {}
+    NexusRequirement(NexusRequirement&& o, allocator_type a) : mod_id(o.mod_id), name(std::move(o.name), a), url(std::move(o.url), a), notes(std::move(o.notes), a), external(o.external) {}
+    NexusRequirement(const NexusRequirement&) = default;
+    NexusRequirement(NexusRequirement&&) = default;
+    NexusRequirement& operator=(const NexusRequirement&) = default;
+    NexusRequirement& operator=(NexusRequirement&&) = default;
+};
+
+struct NexusModInfo {
+    using allocator_type = mol::allocator_type;
+    NexusModSummary summary;
+    string category;
+    vector<NexusRequirement> requirements;
+    vector<string> dlc_requirements;
+    explicit NexusModInfo(allocator_type a = {}) : summary(a), category(a), requirements(a), dlc_requirements(a) {}
+    NexusModInfo(const NexusModInfo& o, allocator_type a) : summary(o.summary, a), category(o.category, a), requirements(o.requirements, a), dlc_requirements(o.dlc_requirements, a) {}
+    NexusModInfo(NexusModInfo&& o, allocator_type a) : summary(std::move(o.summary), a), category(std::move(o.category), a), requirements(std::move(o.requirements), a), dlc_requirements(std::move(o.dlc_requirements), a) {}
+    NexusModInfo(const NexusModInfo&) = default;
+    NexusModInfo(NexusModInfo&&) = default;
+    NexusModInfo& operator=(const NexusModInfo&) = default;
+    NexusModInfo& operator=(NexusModInfo&&) = default;
+};
+
+struct NexusCollectionSummary {
+    using allocator_type = mol::allocator_type;
+    string slug, name, summary;
+    std::int64_t endorsements = 0, downloads = 0, revision = 0, mod_count = 0, total_size = 0;
+    explicit NexusCollectionSummary(allocator_type a = {}) : slug(a), name(a), summary(a) {}
+    NexusCollectionSummary(const NexusCollectionSummary& o, allocator_type a) : slug(o.slug, a), name(o.name, a), summary(o.summary, a), endorsements(o.endorsements), downloads(o.downloads), revision(o.revision), mod_count(o.mod_count), total_size(o.total_size) {}
+    NexusCollectionSummary(NexusCollectionSummary&& o, allocator_type a) : slug(std::move(o.slug), a), name(std::move(o.name), a), summary(std::move(o.summary), a), endorsements(o.endorsements), downloads(o.downloads), revision(o.revision), mod_count(o.mod_count), total_size(o.total_size) {}
+    NexusCollectionSummary(const NexusCollectionSummary&) = default;
+    NexusCollectionSummary(NexusCollectionSummary&&) = default;
+    NexusCollectionSummary& operator=(const NexusCollectionSummary&) = default;
+    NexusCollectionSummary& operator=(NexusCollectionSummary&&) = default;
+};
+
 struct NexusDownload {
     using allocator_type = mol::allocator_type;
     string path;
@@ -119,8 +175,20 @@ public:
     NexusCollectionRev collection_revision(std::string_view game_domain, std::string_view slug, std::int64_t revision = 0, mr* mem = default_mr()) const;
     // 集合清单压缩包（含 collection.json）的下载地址（经 download_path 向 API 换取）。
     string collection_archive_url(std::string_view download_path, mr* mem = default_mr()) const;
+    // 搜索 mod。sort ∈ relevance|endorsements|downloads|updatedAt（其它值 → invalid_argument）。count 夹到 [1,50]。
+    // total 返回匹配总数。
+    vector<NexusModSummary> search_mods(std::string_view game_domain, std::string_view text, std::string_view sort, int count, int offset,
+                                        std::int64_t* total = nullptr, mr* mem = default_mr()) const;
+    // mod 详情与需求（站内需求 + 外部需求 + DLC 需求）。不存在 → Error{nexus_not_found}。
+    NexusModInfo mod_info(std::string_view game_domain, std::int64_t mod_id, mr* mem = default_mr()) const;
+    // 搜索集合。sort ∈ endorsements|downloads|updatedAt|relevance。
+    vector<NexusCollectionSummary> search_collections(std::string_view game_domain, std::string_view text, std::string_view sort, int count, int offset,
+                                                      std::int64_t* total = nullptr, mr* mem = default_mr()) const;
     // 带 apikey 等头的 GET（供测试/调用方复用）。status≥400 → 映射为带 code 的 Error。
     string get_json(std::string_view path_and_query, mr* mem = default_mr()) const;
+
+    // GraphQL v2：执行 query，返回响应体（已检查 HTTP 状态与 errors 字段）。
+    string graphql(std::string_view query, mr* mem = default_mr()) const;
 
 private:
     string get_root_json(std::string_view path_and_query, mr* mem) const;

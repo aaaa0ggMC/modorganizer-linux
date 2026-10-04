@@ -63,6 +63,14 @@
 - `fomod inspect ARCHIVE [--choices FILE]`  只读。data：`{has_fomod,module_name,steps:[{name,visible,groups:[{name,type,explicit_choice,plugins:[{name,description,image,type,selected}]}]}],files:[{source,destination,folder,priority}]}`。`--choices` 给部分/全部选择，未给的组用默认；步骤可见性与插件类型按**此前步骤设置的标志**求值，所以 GUI 每改一次选择就带累计的 choices 再调一次。choices 文件格式：`{"steps":{"<步骤名>":{"<组名>":["<插件名>",…]}}}`。
 - `skse install`  一键：由游戏版本推出运行时 dll（`skse64_<a>_<b>_<c>.dll`）→ 已就绪则不做任何事 → 否则在 Nexus（mod 30379）选主文件，下载（已下载则复用），装为根目录型 mod `SKSE64` → 校验 dll 与游戏匹配。需要 Nexus API key 与游戏层 host 库。幂等。错误码 `skse_mismatch`：最新的 SKSE64 还不支持该游戏版本。data：`{game_version,runtime_dll,installed,mod_name,file_name,file_id,downloaded}`。
 
+### Nexus 搜索与按 id 安装
+
+- `nexus search QUERY [--sort relevance|endorsements|downloads|updatedAt] [--count N≤50] [--offset N]`  搜当前游戏的 mod（QUERY 用站内词干匹配；传空串列出榜单）。data：`{game,query,sort,total,mods:[{mod_id,name,author,summary,version,updated_at,endorsements,downloads,installed}]}`；`installed` = 本实例里已有来自该 mod 的安装（靠 meta.ini 的 `modid`）。
+- `nexus info --mod ID`  data：`{mod:{…同上},category,requirements:[{mod_id,name,external,url,notes,installed}],dlc_requirements:[…]}`。`requirements` 是作者在站内声明的前置（`external:true` 的是站外工具，`url` 给出下载页）。
+- `nexus install --mod ID [--file ID] [--name N] [--requirements] [--fomod F | --fomod-defaults | --no-fomod]`  取主文件（`is_primary` 优先）→ 下载 → 安装 → 写 MO2 兼容的 `meta.ini`（`gameName/modid/fileid`）。目录名默认取站内 mod 名。`--requirements` 递归先装站内前置（深度 ≤4，已装的跳过，自动用 FOMOD 默认值）。**幂等**：已装过（meta.ini 的 modid 匹配）直接 `already_installed`。data：`{status:"complete"|"incomplete",mods:[{mod_id,name,status,mod_dir,note}],pending:[…同 collection 的 pending],external_requirements:[…],dlc_requirements:[…]}`；FOMOD 缺选择/免费账号无法直连 → pending + 退出码 4（与 collection 相同的「incomplete」协议）。
+- `collection search QUERY [--sort …] [--count N] [--offset N]`  搜集合。data：`{game,query,sort,total,collections:[{slug,name,summary,endorsements,downloads,revision,mod_count,total_size}]}`。拿到 slug 后用 `collection inspect/install`。
+- `mods list` 每行多了 `nexus_id`。
+
 ### Collections（Nexus 集合/整合包）与交互设计
 
 mo-linux 不能在中途向用户提问，所以统一用「**可续跑 + 返回 incomplete**」：每个需要人介入的 mod 记为 pending（不阻塞、不猜测），其余 mod 继续处理；命令最后返回退出码 4 与 pending 清单。用户（或 GUI）用 `collection resolve` 记下决定，再跑一次 `collection install` 即从中断处继续（状态存 `<实例>/collections/<slug>/state.json`，每个 mod 处理完立即落盘；已装好的不会重做，已下载的按「大小+md5」复用，无需联网）。

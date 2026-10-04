@@ -93,6 +93,23 @@ constexpr OptionSpec kOptFomodInspect[] = {
 constexpr OptionSpec kOptPluginsMove[] = {
     {"to", "", "--to", "Target load-order position (0 = first)", true},
 };
+constexpr OptionSpec kOptSearch[] = {
+    {"sort", "", "--sort", "relevance|endorsements|downloads|updatedAt (default: relevance)", true},
+    {"count", "", "--count", "Number of results (1-50, default 10)", true},
+    {"offset", "", "--offset", "Skip this many results", true},
+};
+constexpr OptionSpec kOptNexusInstall[] = {
+    {"mod", "", "--mod", "Nexus mod id", true},
+    {"file", "", "--file", "Nexus file id (default: the main file)", true},
+    {"name", "", "--name", "Mod directory name (default: Nexus file name)", true},
+    {"requirements", "", "--requirements", "Also install the mod's Nexus requirements (recursively)", false},
+    {"fomod", "", "--fomod", "FOMOD choices JSON file", true},
+    {"fomod-defaults", "", "--fomod-defaults", "Install a FOMOD with its default choices", false},
+    {"no-fomod", "", "--no-fomod", "Ignore the FOMOD installer", false},
+};
+constexpr OptionSpec kOptNexusInfo[] = {
+    {"mod", "", "--mod", "Nexus mod id", true},
+};
 constexpr OptionSpec kOptCollectionInspect[] = {
     {"revision", "", "--revision", "Collection revision number (default: latest published)", true},
 };

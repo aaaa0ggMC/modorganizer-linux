@@ -17,6 +17,7 @@ namespace mockhttp {
 struct Req {
     std::string method, target;
     std::map<std::string, std::string> h;  // 小写键
+    std::string body;                      // 请求体（按 Content-Length 读取）
 };
 struct Resp {
     int status = 200;
@@ -81,6 +82,16 @@ private:
                     r.h[k] = v;
                 }
                 pos = e + 2;
+            }
+            if (auto it = r.h.find("content-length"); it != r.h.end()) {
+                const std::size_t want = static_cast<std::size_t>(std::stoul(it->second));
+                std::string body = buf.substr(std::min(buf.size(), buf.find("\r\n\r\n") + 4));
+                while (body.size() < want) {
+                    const ssize_t n = ::recv(c, tmp, sizeof tmp, 0);
+                    if (n <= 0) break;
+                    body.append(tmp, static_cast<size_t>(n));
+                }
+                r.body = body.substr(0, want);
             }
             seen.push_back(r);
             const Resp resp = fn_(r);
