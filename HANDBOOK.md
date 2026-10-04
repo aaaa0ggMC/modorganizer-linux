@@ -1,11 +1,11 @@
 # mo-linux HANDBOOK
 
 > 面向**审阅与复核**：设计意图、关键取舍、当前进度、未验证项、可执行的检查清单。
-> 状态快照：2026-10-04（**接续点**，见 §0）。凡标 **[已验证]** 的都有可重跑的命令；**[未验证]** 的没有，别当成事实。
+> 状态快照：2026-10-04 晚（**接续点**，见 §0）。凡标 **[已验证]** 的都有可重跑的命令；**[未验证]** 的没有，别当成事实。
 
 ## 0. 接续点摘要（从这里开始读）
 
-**一句话**：Linux 上已经能用**零修改的上游 MO2 游戏插件**读取真实 Skyrim SE，并把「游戏 + mod」合并成符号链接农场，Proton 容器内实测能穿过链接读到游戏文件；CLI 外壳已接续完成并完整复核，包含 `game info`；真正启动游戏、plugins.txt 接线等还没做。
+**一句话**：Linux 上已经能用**零修改的上游 MO2 游戏插件**读取真实 Skyrim SE，并把「游戏 + mod」合并成符号链接农场，Proton 容器内实测能穿过链接读到游戏文件；CLI 外壳已完成；**已用 mo-linux 真实启动过原版游戏与 SKSE 2.3.1（见 §0.1）**，含插件管理、FOMOD、Nexus 下载、一键装 SKSE。
 
 **已完成并合入 `main`（均有可重跑的测试，见 §13）**
 - core：casefold 合并、链接农场、MO2 格式、实例模型、runner、`GameHost`（dlopen）。manifest 与 `mo-linux.json` 已迁到 alib6 `AData`，**core 里不再有 nlohmann**。
@@ -23,7 +23,32 @@
 
 **对 alib6（`~/Projs/aaaa0ggmcLib`）的修改：工作区未提交，需作者自行提交**（5 个文件，见 §6.5）。
 
-**当前明确未做项**：真正启动 `SkyrimSE.exe`（需用户确认）、`plugins sync` 与 `mappings()` 的符号链接物化（R9）、overwrite 捕获、`doctor`、固定 `third_party` 提交、LICENSE。
+### 0.1 2026-10-04 晚：从「能合并」到「能玩」（均已提交，ctest 21/21、e2e 125/125、check_cli 22/22）
+
+| 能力 | 命令 | 状态 / 验证 |
+|---|---|---|
+| 自动探测 Steam | `instance init`（路径全可省略） | 读 libraryfolders.vdf、compatdata/489830/pfx、最新 Proton；有单测 |
+| 启动 | `run [--skse] [--detach] [--dry-run]` | **真实启动过**原版与 SKSE（Proton 9.0 Beta，真实前缀）。流程：capture 残留 → 固化插件列表 → plugins sync → apply → onAboutToRun → proton run → 退出后 capture |
+| plugins.txt 映射 | `plugins sync` | 把上游 `mappings()` 物化为符号链接；已有真实文件改名 `.mol-backup` |
+| overwrite | `overwrite capture` / `overwrite promote --filter G [--yes]` | capture 把农场里游戏新建的真实文件移回 overwrite（同名先备份）；promote 是**唯一**写真实游戏目录的命令，默认只预览。已把 66 个 Creations（132 文件）永久放进真实 Data |
+| 防误操作 | `farm_busy` | apply/unlink/run/capture 前扫 /proc，游戏在跑就拒绝 |
+| 体检 | `doctor` | 游戏/exe/版本、SKSE↔游戏版本匹配、前缀/Proton、farm 漂移、masters、plugins 链接；有 error 退出码 3 |
+| mod 安装 | `mods install ARCHIVE [--fomod F\|--fomod-defaults\|--no-fomod] [--root]` | 解压用外部 7z/bsdtar；拒绝符号链接/越界；自动去外壳；**根目录型 mod**（顶层有 exe/dll，如 SKSE）映射到农场根，`meta.ini` 写 `mol_root=true` |
+| FOMOD | `fomod inspect ARCHIVE [--choices F]` + 上面的安装模式 | 语义对齐 MO2 installer_fomod（见 core/include/mol/fomod.hpp 头注释）；expat 解析，支持 UTF-16/cp1252；单测覆盖标志、可见性、依赖模式、优先级、大小写/反斜杠路径。**未实测过真实 FOMOD 包**（只用合成包） |
+| 插件管理 | `plugins list/enable/disable/move/sort` | 读 TES4 头里的 masters；顺序规则=强制→ESM→其它；`sort` 只保证 master 在前，**不是 LOOT**；在真实 76 个插件上跑通 |
+| Nexus | `nexus login/logout/whoami/files/download` | libcurl；key 来自 `NEXUS_API_KEY` 或 `~/.config/mo-linux/nexus.key`(0600)，先验证再保存，永不进输出；断点续传；**已用真实 Premium 个人 key 跑通**（validate/files/download）。免费账号须 `--nxm` |
+| SKSE 一键 | `skse install` | 游戏版本→`skse64_a_b_c.dll`→Nexus 主文件(mod 30379)→装为 `SKSE64`→校验；幂等；**从零实例实测通过**（2.3.1 对应 1.7.104） |
+
+**实测结论**：旧的 SKSE 1.6.1170 确实因版本不匹配被加载器拒绝（"newer version of Skyrim than this version of SKSE64 supports"）；换成 Nexus 的 2.3.1 后 skse64.log 出现 `init complete`、`hooked dinput`。
+
+**本轮踩过的坑（防止复发）**
+- 命令专有开关必须 `register_toggle`，否则两个开关连用时后者被前者当值吞掉（曾导致 `--dry-run` 失效而真启动了游戏）；`get_bool` 对「存在但值为空」要返回 true。已有单测。
+- 构建目录不要放 `/tmp`（tmpfs=内存，曾因此挤占内存、拖停用户的 Steam 下载）；本轮之后用 `~/.cache/mol/`。
+- 用户的游戏版本是 1.7.104.0，对应 SKSE 2.3.1；Nexus 文件的 `category_name` 里 MAIN/OLD_VERSION/ARCHIVED 混杂，选文件靠 `is_primary`。
+- Nexus 的 CDN 下载 URL 末段现在是 UUID，文件名必须取 `files.json` 的 `file_name`。
+- 官方 API 政策（help.nexusmods.com/article/114）：个人 key 仅容许测试/个人使用；公开发布前须联系 support 注册应用拿 SSO slug；禁止冒充其它应用（含借用 MO2 的标识）、禁止用别的应用的 key。**不要用 MO2 的 SSO 标识。**
+
+**当前明确未做项**：Nexus SSO（需先注册应用）、Nexus Collections / Wabbajack 整合包导入、mod 之间的依赖图（Nexus Requirements）、LOOT 式排序、FOMOD 图片提取与 GUI 向导（CLI 侧接口已就绪）、mod 更新检查、固定 `third_party` 提交、LICENSE。真实的写穿符号链接限制见 R13。
 
 ## 1. 目标与边界
 
@@ -34,7 +59,7 @@
 3. 用 **Proton/Wine** 从农场里启动游戏或 SKSE。
 4. CLI **无状态、幂等、`--json`**；GUI（另行开发）只解析 CLI 的 stdout / 事件流。
 
-**不做（本阶段）**：不移植 MO2 的 Qt GUI；不实现 usvfs；不做 mod 安装（解压/FOMOD）；不做 Nexus 登录/下载（见 §12）；不支持 Skyrim SE 以外的游戏（但游戏层是上游代码，扩展成本低）。
+**不做（本阶段）**：不移植 MO2 的 Qt GUI；不实现 usvfs；（mod 安装/FOMOD/Nexus 下载已在后续补上，见 §0.1；）不支持 Skyrim SE 以外的游戏（但游戏层是上游代码，扩展成本低）。
 
 ## 2. 架构
 
@@ -203,9 +228,14 @@ Claude 阶段的提交带 `Co-Authored-By` 与 `Claude-Session`；接续提交�
 | R6 | GPL-3.0：复用 MO2 代码意味着本项目须以 GPL-3.0 发布，**尚未添加 LICENSE** | 中 |
 | R7 | `mo2fmt` 缺 Ini/loadorder writer（nlohmann 已从 core 移除，**已解决**） | 低 |
 | R8 | `write_modlist` 丢 `*` 行（见 §7-3） | 低 |
-| R9 | **plugins.txt / ini / 存档的 profile 同步**：设计已明确、部分已实现。上游 `mappings()`（profile 的 `plugins.txt`/`loadorder.txt` → 游戏 AppData）、`initializeProfile()`、`prepareIni()` 已通过 C ABI 暴露（`mo_game_mappings_json / mo_game_initialize_profile / mo_game_about_to_run`），并在假前缀上实测：`initializeProfile` 复制出正确内容，`prepareIni` 正确追加 `[Launcher] bEnableFileSelection=1` 且保留原有内容。**`plugins sync` 已接线（2026-10-04，真实游戏目录 + 一次性前缀实测：首次 link、二次全 ok、幂等）**；未做：`run` 前自动调用、`about_to_run`、每 profile 的 ini/存档隔离、overwrite 捕获。原目标：把 `mappings()` 物化为符号链接（游戏写 plugins.txt 时写穿到 profile 文件，与 MO2/usvfs 语义一致）、每 profile 的 ini/存档隔离、overwrite 捕获 | 中 |
+| R9 | **plugins.txt / ini / 存档的 profile 同步**：设计已明确、部分已实现。上游 `mappings()`（profile 的 `plugins.txt`/`loadorder.txt` → 游戏 AppData）、`initializeProfile()`、`prepareIni()` 已通过 C ABI 暴露（`mo_game_mappings_json / mo_game_initialize_profile / mo_game_about_to_run`），并在假前缀上实测：`initializeProfile` 复制出正确内容，`prepareIni` 正确追加 `[Launcher] bEnableFileSelection=1` 且保留原有内容。**`plugins sync` 已接线（2026-10-04，真实游戏目录 + 一次性前缀实测：首次 link、二次全 ok、幂等）**；`run` 已自动调用、overwrite 捕获已做（见 §0.1）；仍未做：每 profile 的 ini/存档隔离。原目标：把 `mappings()` 物化为符号链接（游戏写 plugins.txt 时写穿到 profile 文件，与 MO2/usvfs 语义一致）、每 profile 的 ini/存档隔离、overwrite 捕获 | 中 |
 | R10 | **Qt 文件访问不做大小写不敏感**的真实后果：游戏跑过后会生成 `Skyrim.ini`/`SkyrimPrefs.ini`（大写），上游 `initializeProfile` 用 Qt 判断 `skyrim.ini` 是否存在 → 判为不存在 → 回退到游戏默认 ini，忽略用户已有设置。缓解方案（任选其一，待做）：①host 在调用前建一个只含小写别名链接的影子 Documents 目录并临时覆盖 shim 的 Documents 路径（不碰用户前缀）；②core 自己实现这一步 ini 复制 | 中 |
 | R11 | ~~WP8 尚未完整复核~~ **已解决**：当前主仓库完成独立构建、14/14 单测、端到端生命周期和真实 host 的假目录集成；选项/开关由 alib6 解析、日志进 stderr、用法错误不执行变更。 | 已解决 |
+| R13 | **写穿符号链接**：农场里文件是指向游戏目录/mod 原文件的符号链接。游戏若**直接改写**已有文件（非删除重建），修改会落到原文件（游戏目录或 mod 里），不会进 overwrite。usvfs 能拦住，我们拦不住；根治需 FUSE/overlay。Steam「验证文件完整性」可还原游戏目录的被改文件 | 中 |
+| R14 | `overwrite promote --yes` 是破坏性的、不可撤销的（文件移进真实游戏 Data，不再受我们管理）；目标已存在时跳过不覆盖 | 低 |
+| R15 | FOMOD 只在合成包上测过；与 MO2 的差异：忽略 alwaysInstall/installIfUsable（与 MO2 一致）、`moduleDependencies` 不检查；图片不提取 | 中 |
+| R16 | Nexus 个人 key 仅限个人/测试；公开发布需向 Nexus 注册应用拿 SSO slug（官方流程见 §0.1）。API 限流（日/时额度）已映射为 `nexus_rate_limited` 但未做退避重试 | 中 |
+| R17 | `skse install` 依赖 Nexus 主文件标记与 SKSE 的 dll 命名规则（`skse64_<a>_<b>_<c>.dll`）；官方改规则时要跟 | 低 |
 | R12 | **alib6 的 4 处修改未提交**，且第 3 点是行为变更；若作者在别处使用了"同时声明破折号别名与 name，并依赖裸 name 匹配"的写法会受影响 | 中 |
 
 ## 12. 路线图（建议顺序；已完成项已划去）
