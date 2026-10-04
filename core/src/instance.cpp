@@ -10,16 +10,16 @@
 #include <sstream>
 #include <system_error>
 
-#include <nlohmann/json.hpp>
 
 #include "mol/casefold.hpp"
 #include "mol/mo2fmt.hpp"
+
+import alib6;
 
 namespace mol {
 namespace {
 
 namespace fs = std::filesystem;
-using json = nlohmann::json;
 
 constexpr const char* kConfigFile = "mo-linux.json";
 constexpr const char* kIniFile = "ModOrganizer.ini";
@@ -99,22 +99,23 @@ void make_dirs(const fs::path& p) {
     if (ec) throw Error("io_error", "cannot create directory: " + ec.message(), p.string());
 }
 
-std::string json_str(const json& j, const char* key, const fs::path& file) {
-    auto it = j.find(key);
-    if (it == j.end() || it->is_null()) return {};
-    if (!it->is_string())
-        throw Error("config_invalid", std::string("field '") + key + "' must be a string", file.string());
-    return it->get<std::string>();
+std::string json_str(const alib6::AData& j, const char* key, const fs::path& file) {
+    const auto& obj = j.object();
+    auto it = obj.find(key);
+    if (it == obj.end() || it.second().is_null()) return {};
+    auto v = it.second().is_value() ? it.second().try_to<std::string_view>() : std::nullopt;
+    if (!v) throw Error("config_invalid", std::string("field '") + key + "' must be a string", file.string());
+    return std::string(*v);
 }
 
-json load_config_json(const fs::path& file) {
-    if (!path_exists(file)) return json::object();
-    json j;
-    try {
-        j = json::parse(read_file(file));
-    } catch (const std::exception& e) {
-        throw Error("config_invalid", std::string("invalid JSON: ") + e.what(), file.string());
+alib6::AData load_config_json(const fs::path& file) {
+    alib6::AData j;
+    if (!path_exists(file)) {
+        j._set_object();
+        return j;
     }
+    if (!j.load_from_memory(read_file(file)))
+        throw Error("config_invalid", "invalid JSON", file.string());
     if (!j.is_object()) throw Error("config_invalid", "top level must be an object", file.string());
     return j;
 }
@@ -165,7 +166,7 @@ Instance load_instance(std::string_view root_sv, std::string_view profile_overri
     if (!path_exists(cfg_file) && !path_exists(ini_file))
         throw Error("instance_not_found", std::string("neither ") + kConfigFile + " nor " + kIniFile + " found", root.string());
 
-    const json j = load_config_json(cfg_file);
+    const alib6::AData j = load_config_json(cfg_file);
     const Ini ini = Ini::load(S(ini_file.string()), mem);
 
     Instance inst(mem);
@@ -234,9 +235,9 @@ bool init_instance(const InitOptions& o) {
     if (!o.profile.empty()) ensure_dir(root / "profiles" / S(o.profile));
 
     const fs::path cfg_file = root / kConfigFile;
-    json j = load_config_json(cfg_file);
+    alib6::AData j = load_config_json(cfg_file);
     auto set = [&](const char* key, std::string_view v) {
-        if (!v.empty()) j[key] = S(v);
+        if (!v.empty()) j[key] = v;
     };
     j["version"] = 1;
     set("game", o.game);
@@ -247,7 +248,10 @@ bool init_instance(const InitOptions& o) {
     set("runner_kind", o.runner_kind);
     set("proton_path", o.proton_path);
     set("steam_root", o.steam_root);
-    const std::string next = j.dump(2) + "\n";
+    alib6::JSON json{alib6::JSONConfig{.dump_indent = 2, .compact_spaces = true,
+                                       .sort_object = alib6::JSONConfig::sort_asc}};
+    const auto dumped = j.dump_to_string(json);
+    const std::string next = std::string(dumped.data(), dumped.size()) + "\n";
     if (read_file(cfg_file) != next) {
         atomic_write(cfg_file, next);
         changed = true;

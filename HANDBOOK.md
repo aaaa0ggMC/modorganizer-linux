@@ -43,7 +43,7 @@ mo-linux (CLI, GCC, C++26, alib6)            ← cli/
 | D5 | **uibase 用补丁副本**（`patches/uibase/`），而非零修改 | `QUuid(GUID)`、`QImage::fromHICON` 等 Windows 专属代码 shim 补不了；补丁只 1 个文件 2 处 | 重写 uibase |
 | D6 | **host 用 clang 单独构建**，对外只有 C ABI | GCC 不接受上游的类作用域显式特化、`virtual ~X() = 0 {}` 等 MSVC 习惯用法 | 全用 GCC + 更多补丁 |
 | D7 | **全面 PMR**（`mol::string`/`mol::vector` + 末参数 `mr* mem`） | 用户预期小对象极多；便于 arena 一次释放 | 普通 STL |
-| D8 | **用自己的库 alib6**（反射 JSON、`Command`、`Logger`） | 用户要求；已验证反射可序列化嵌套 PMR 结构体 | nlohmann/spdlog/CLI11（仅 core 的 manifest 暂用 nlohmann，见 §11） |
+| D8 | **用自己的库 alib6**（`AData`+反射 JSON、`Command`、`Logger`），core/CLI 内不再混用 nlohmann | 用户要求；已验证反射可序列化嵌套 PMR 结构体；core 的 manifest 与 `mo-linux.json` 已迁到 `AData` | nlohmann/spdlog/CLI11 |
 | D9 | 进度走 `--events fd:N\|fifo:P\|unix:P`（NDJSON） | GUI 作父进程时 fd 最简单；其余两种覆盖非父子场景；与最终 envelope 分流 | 把进度混进 stdout |
 | D10 | 每个下游工作包用独立 git worktree，review 后合并 | 互不破坏构建；可回滚 | 共用工作区 |
 
@@ -100,6 +100,14 @@ mo-linux (CLI, GCC, C++26, alib6)            ← cli/
 - `registry.cpp` 整体替换为 `host/overrides/uibase/registry.cpp`（无头版，不弹对话框）。
 - 漏洞提醒：补丁与上游版本绑定；升级 uibase 必须重跑 `scripts/make_uibase_patch.py` 并复核。
 
+## 6.5 对 alib6 的改动（在 `~/Projs/aaaa0ggmcLib`，工作区未提交，需作者自行提交）
+
+`Command` 的命令行解析有两处缺陷，已按用户授权修复（`modules/alib6/core/cmd.cpp`、`include/alib6/core/cmd.cppm`，约 85 行；`tests/alib6/test_cmd.cpp` 新增 5 个用例，alib6 的 cmd/parser/router 共 17 个测试通过）：
+1. **前置选项**：第一个路由 token 之前的选项/开关（`prog -j -i /x mods list`）此前不会让路由下降，整条路由被挤成位置参数。现在 `dispatch_pipeline` 在 `router.match` 前做"根层预扫描"，选项落入 main 层，`has/get` 跨层可见。
+2. **`--` 终止符**：此前 `--` 后的 `-j` 仍被当作开关，且 `--` 进入 `args()`。现在 `--` 之后一律是位置参数，`--` 本身被吞掉（含前置位置）。
+- 实验结论（可复核）：选项在第一个路由 token 之后放哪里都行；`--name=value` 与 `--name value` 均支持；`has()` 扫描所有层，`get()` 从当前层往上回溯。
+- 因此 CLI 层**不需要**自己解析选项；WP8 当初自写的 `cli/args.cpp` 应删除（见 §10 WP8）。
+
 ## 7. 已知的"悄悄不一样"之处（审阅重点）
 
 1. **大小写不敏感只存在于 shim 的 Win32 API 里**（`CreateFileW`/`GetFileAttributesW`/`FindFirstFileW`/ini/版本资源经 `resolve_ci`）。上游通过 **Qt（`QFile`/`QDir`）** 做的文件访问在 Linux 上仍然区分大小写。游戏目录里写法固定，通常无碍，但 mod 目录名与 modlist 大小写不一致时 `list_mods` 已做 CI 兜底，其它路径没有。
@@ -139,7 +147,7 @@ ctest --test-dir build --output-on-failure
 | WP5 | shim：ini / 版本资源 / 注册表 | opencode | **进行中**（超出 shell 预算，持续迭代） |
 | WP6 | shim：文件/映射/时间/shell/COM | opencode | 通过；我加了 ASan/UBSan 复核 |
 | WP7 | 实例模型 | 副总监自写 | 完成 |
-| WP8 | CLI 外壳 | opencode | **返工中**：撤销手写 JSON，改用反射；做 e2e 联调 |
+| WP8 | CLI 外壳 | opencode | **返工中**：撤销手写 JSON，改用反射；做 e2e 联调。**下一轮**：删除 `cli/args.cpp` 的选项自解析，直接读 `CommandInput`（alib6 的 Command 已修） |
 | — | runner、game_host | 副总监自写 | 完成（未真实启动） |
 
 提交均带 `Co-Authored-By` 与 `Claude-Session`；提交前跑 `privacy-scan.sh`（有 4 次命中均为测试里的占位路径，已逐条确认为误报，其中一次改为中性路径）。
@@ -154,7 +162,7 @@ ctest --test-dir build --output-on-failure
 | R4 | `third_party` 未固定 commit / 未建 submodule；uibase 补丁与版本绑定 | 中 |
 | R5 | `CMAKE_EXPERIMENTAL_CXX_IMPORT_STD` 的 UUID 随 CMake 版本变，升级会直接失败（有清晰报错） | 中 |
 | R6 | GPL-3.0：复用 MO2 代码意味着本项目须以 GPL-3.0 发布，**尚未添加 LICENSE** | 中 |
-| R7 | core 的 manifest 仍用 nlohmann（违背 D8）；`mo2fmt` 缺 Ini/loadorder writer | 低 |
+| R7 | `mo2fmt` 缺 Ini/loadorder writer（nlohmann 已从 core 移除，**已解决**） | 低 |
 | R8 | `write_modlist` 丢 `*` 行（见 §7-3） | 低 |
 | R9 | plugins.txt / ini / 存档与 Wine prefix 的同步（每 profile 隔离）**尚未设计落地** | 高（功能缺口） |
 

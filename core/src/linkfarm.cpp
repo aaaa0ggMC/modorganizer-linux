@@ -21,7 +21,8 @@
 #include <utility>
 #include <vector>
 
-#include <nlohmann/json.hpp>
+
+import alib6;
 
 namespace mol {
 namespace {
@@ -132,21 +133,24 @@ std::pmr::vector<std::string_view> load_manifest(const fs::path& root, Arena& a)
     std::pmr::vector<std::string_view> out(a.get());
     std::ifstream in(root / kFarmMarker, std::ios::binary);
     if (!in) fail_path("linkfarm: cannot read manifest", manifest_path_str(root), "open failed");
-    nlohmann::json j;
-    try {
-        in >> j;
-    } catch (const std::exception& e) {
-        fail_path("linkfarm: corrupt manifest", manifest_path_str(root), e.what());
-    }
-    if (!j.is_object() || !j.contains("version") || !j["version"].is_number_integer() ||
-        j["version"].get<long long>() != 1 || !j.contains("created") || !j["created"].is_array())
-        fail_path("linkfarm: bad manifest schema", manifest_path_str(root),
-                  "expected {\"version\":1,\"created\":[]}");
-    for (const auto& v : j["created"]) {
-        if (!v.is_string())
-            fail_path("linkfarm: bad manifest schema", manifest_path_str(root),
-                      "created[] must be strings");
-        out.push_back(a.dup(v.get<std::string>()));
+    const std::string text((std::istreambuf_iterator<char>(in)), std::istreambuf_iterator<char>());
+
+    alib6::AData doc(a.get());
+    if (!doc.load_from_memory(text)) fail_path("linkfarm: corrupt manifest", manifest_path_str(root), "invalid JSON");
+    const char* schema = "expected {\"version\":1,\"created\":[]}";
+    if (!doc.is_object()) fail_path("linkfarm: bad manifest schema", manifest_path_str(root), schema);
+    const auto& obj = doc.object();
+    auto vit = obj.find("version");
+    auto cit = obj.find("created");
+    if (vit == obj.end() || cit == obj.end()) fail_path("linkfarm: bad manifest schema", manifest_path_str(root), schema);
+    auto ver = vit.second().try_to<long long>();
+    if (!ver || *ver != 1 || !cit.second().is_array())
+        fail_path("linkfarm: bad manifest schema", manifest_path_str(root), schema);
+    for (const auto& v : cit.second().array()) {
+        auto str = v.try_to<std::string_view>();
+        if (!str)
+            fail_path("linkfarm: bad manifest schema", manifest_path_str(root), "created[] must be strings");
+        out.push_back(a.dup(*str));
     }
     std::sort(out.begin(), out.end());
     return out;
@@ -154,16 +158,23 @@ std::pmr::vector<std::string_view> load_manifest(const fs::path& root, Arena& a)
 
 // 原子写 manifest：临时文件 + rename。
 void store_manifest(const fs::path& root, const std::pmr::set<std::pmr::string>& created) {
-    nlohmann::json j = nlohmann::json::object();
-    j["version"] = 1;
-    j["created"] = nlohmann::json::array();
-    for (const auto& s : created) j["created"].push_back(s);  // 已是字节序升序
+    alib6::AData doc(default_mr());
+    doc["version"] = 1;
+    auto& arr = doc["created"];
+    arr._set_array();  // 即使为空也要写成 []
+    std::ptrdiff_t i = 0;
+    for (const auto& s : created) arr[i++] = std::string_view(s);  // set 已是字节序升序
+
+    alib6::JSON json{alib6::JSONConfig{.dump_indent = 2, .compact_spaces = true,
+                                       .sort_object = alib6::JSONConfig::sort_asc}};
+    const auto text = doc.dump_to_string(json);
 
     const fs::path tmp = root / (std::string(kFarmMarker) + ".tmp");
     {
         std::ofstream os(tmp, std::ios::binary | std::ios::trunc);
         if (!os) fail_path("linkfarm: cannot write manifest", tmp.generic_string(), "open failed");
-        os << j.dump(2) << "\n";
+        os.write(text.data(), static_cast<std::streamsize>(text.size()));
+        os << "\n";
         os.flush();
         if (!os) fail_path("linkfarm: cannot write manifest", tmp.generic_string(), "write failed");
     }

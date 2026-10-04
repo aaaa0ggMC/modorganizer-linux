@@ -15,18 +15,16 @@ set(CMAKE_CXX_EXTENSIONS OFF)
 set(CMAKE_CXX_MODULE_STD ON)
 set(CMAKE_EXPORT_COMPILE_COMMANDS ON)
 
-find_package(nlohmann_json REQUIRED)
+# ---- alib6（aaaa0ggmcLib）：日志 / JSON(AData+反射) / 命令行 ---------------------
+include(cmake/alib6.cmake)
+mol_alib6()
 
 # ---- core: PMR 风格的纯 C++26 逻辑（无 Qt）----------------------------------
 file(GLOB CORE_SRC CONFIGURE_DEPENDS core/src/*.cpp)
 add_library(mocore STATIC ${CORE_SRC})
 target_include_directories(mocore PUBLIC core/include)
 target_compile_options(mocore PRIVATE -Wall -Wextra)
-target_link_libraries(mocore PUBLIC nlohmann_json::nlohmann_json)
-
-# ---- alib6（aaaa0ggmcLib）：日志 / JSON / 命令行 ------------------------------
-include(cmake/alib6.cmake)
-mol_alib6()
+target_link_libraries(mocore PUBLIC mol_alib6)
 
 # ---- CLI --------------------------------------------------------------------
 file(GLOB CLI_SRC CONFIGURE_DEPENDS cli/*.cpp)

@@ -9,7 +9,8 @@
 #include "mol/linkfarm.hpp"
 #include "mol/merge.hpp"
 
-#include <nlohmann/json.hpp>
+import alib6;
+
 
 namespace fs = std::filesystem;
 
@@ -72,12 +73,28 @@ MergeResult make_result(const std::vector<Ent>& l) {
     return r;
 }
 
-nlohmann::json read_manifest(const fs::path& farm) {
+// manifest 的解析结果（用 alib6 AData 读，和被测代码同一套 JSON 实现）。
+struct Manifest {
+    int version = 0;
+    std::vector<std::string> created;
+};
+
+Manifest read_manifest(const fs::path& farm) {
     std::ifstream in(farm / mol::kFarmMarker, std::ios::binary);
     CHECK(static_cast<bool>(in));
-    nlohmann::json j;
-    in >> j;
-    return j;
+    const std::string text((std::istreambuf_iterator<char>(in)), std::istreambuf_iterator<char>());
+    alib6::AData doc;
+    CHECK(doc.load_from_memory(text));
+    Manifest m;
+    CHECK(doc.is_object());
+    const auto& obj = doc.object();
+    auto v = obj.find("version");
+    auto c = obj.find("created");
+    CHECK(v != obj.end() && c != obj.end());
+    if (v != obj.end()) m.version = v.second().to<int>();
+    if (c != obj.end() && c.second().is_array())
+        for (const auto& e : c.second().array()) m.created.emplace_back(e.to<std::string_view>());
+    return m;
 }
 
 std::string op_str(const mol::Op& op) {
@@ -133,13 +150,13 @@ TEST(apply_farm_creates_tree_and_is_idempotent) {
     CHECK(fs::is_regular_file(src / "a.dds"));
 
     // manifest：version 1 + created 按字节序排序、且不含 marker 自身
-    const nlohmann::json j = read_manifest(farm);
-    CHECK_EQ(j["version"].get<int>(), 1);
-    CHECK_EQ(static_cast<std::size_t>(j["created"].size()), static_cast<std::size_t>(4));
+    const Manifest j = read_manifest(farm);
+    CHECK_EQ(j.version, 1);
+    CHECK_EQ(j.created.size(), static_cast<std::size_t>(4));
     const std::vector<std::string> expect_created = {"Data", "Data/Textures", "Data/Textures/t.dds",
                                                      "Data/a.dds"};
     for (std::size_t i = 0; i < expect_created.size(); ++i)
-        CHECK_EQ(j["created"][i].get<std::string>(), expect_created[i]);
+        CHECK_EQ(j.created[i], expect_created[i]);
     // 没有留下临时文件
     CHECK(!fs::exists(farm / (std::string(mol::kFarmMarker) + ".tmp")));
 
@@ -212,10 +229,10 @@ TEST(removed_entries_trigger_remove_and_rmdir) {
     CHECK(fs::is_symlink(farm / "Data" / "a.dds"));
     CHECK(fs::is_directory(farm / "Data"));
     // manifest 同步收敛，再 plan 为空
-    const nlohmann::json j = read_manifest(farm);
-    CHECK_EQ(static_cast<std::size_t>(j["created"].size()), static_cast<std::size_t>(2));
-    CHECK_EQ(j["created"][0].get<std::string>(), "Data");
-    CHECK_EQ(j["created"][1].get<std::string>(), "Data/a.dds");
+    const Manifest j = read_manifest(farm);
+    CHECK_EQ(j.created.size(), static_cast<std::size_t>(2));
+    CHECK_EQ(j.created[0], "Data");
+    CHECK_EQ(j.created[1], "Data/a.dds");
     CHECK(mol::plan_farm(r2, sp(farm)).empty());
 }
 
@@ -318,10 +335,10 @@ TEST(rmdir_skips_user_content) {
     CHECK(fs::is_regular_file(src / "x.dds"));
     CHECK(fs::is_regular_file(src / "a.dds"));
     // Sub 仍留在 manifest 里，再 plan 依然为空（不会反复尝试删）
-    const nlohmann::json j = read_manifest(farm);
+    const Manifest j = read_manifest(farm);
     bool saw_sub = false;
-    for (const auto& v : j["created"])
-        if (v.get<std::string>() == "Data/Sub") saw_sub = true;
+    for (const auto& v : j.created)
+        if (v == "Data/Sub") saw_sub = true;
     CHECK(saw_sub);
     CHECK(mol::plan_farm(r2, sp(farm)).empty());
 }
@@ -428,9 +445,9 @@ TEST(apply_failure_keeps_completed_manifest) {
     CHECK(threw);
 
     // 已完成的部分必须留在 manifest：Data 与 Data/keep.dds 在，Data/a.dds 已删
-    const nlohmann::json j = read_manifest(farm);
+    const Manifest j = read_manifest(farm);
     std::vector<std::string> created;
-    for (const auto& v : j["created"]) created.push_back(v.get<std::string>());
+    for (const auto& v : j.created) created.push_back(v);
     const std::vector<std::string> expect = {"Data", "Data/keep.dds"};
     CHECK_EQ(created.size(), expect.size());
     for (std::size_t i = 0; i < expect.size() && i < created.size(); ++i)
@@ -588,10 +605,10 @@ TEST(apply_fails_on_user_file_at_parent_path) {
     CHECK(threw);
     // 用户文件没被删，manifest 没丢原有记录
     CHECK(fs::is_regular_file(farm / "Data" / "Sub"));
-    const nlohmann::json j = read_manifest(farm);
-    CHECK_EQ(static_cast<std::size_t>(j["created"].size()), static_cast<std::size_t>(2));
-    CHECK_EQ(j["created"][0].get<std::string>(), "Data");
-    CHECK_EQ(j["created"][1].get<std::string>(), "Data/a.dds");
+    const Manifest j = read_manifest(farm);
+    CHECK_EQ(j.created.size(), static_cast<std::size_t>(2));
+    CHECK_EQ(j.created[0], "Data");
+    CHECK_EQ(j.created[1], "Data/a.dds");
     // 原期望仍然收敛
     CHECK(mol::plan_farm(r1, sp(farm)).empty());
 
@@ -641,9 +658,9 @@ TEST(conflicting_nonempty_dir_is_not_wiped) {
     // 用户内容完好；我们自己的 a.dds 已被清掉并从 manifest 注销，Data 仍在 manifest 里
     CHECK(fs::is_regular_file(farm / "Data" / "user.txt"));
     CHECK(!fs::exists(farm / "Data" / "a.dds"));
-    const nlohmann::json j = read_manifest(farm);
-    CHECK_EQ(static_cast<std::size_t>(j["created"].size()), static_cast<std::size_t>(1));
-    CHECK_EQ(j["created"][0].get<std::string>(), "Data");
+    const Manifest j = read_manifest(farm);
+    CHECK_EQ(j.created.size(), static_cast<std::size_t>(1));
+    CHECK_EQ(j.created[0], "Data");
     // 原期望仍可收敛：只需补回 a.dds，用户内容不动
     const mol::Plan again = mol::plan_farm(r1, sp(farm));
     CHECK_EQ(ops_str(again), "Link Data/a.dds -> " + sp(src / "a.dds") + "\n");
