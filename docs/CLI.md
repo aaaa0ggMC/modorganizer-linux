@@ -63,6 +63,13 @@
 - `fomod inspect ARCHIVE [--choices FILE]`  只读。data：`{has_fomod,module_name,steps:[{name,visible,groups:[{name,type,explicit_choice,plugins:[{name,description,image,type,selected}]}]}],files:[{source,destination,folder,priority}]}`。`--choices` 给部分/全部选择，未给的组用默认；步骤可见性与插件类型按**此前步骤设置的标志**求值，所以 GUI 每改一次选择就带累计的 choices 再调一次。choices 文件格式：`{"steps":{"<步骤名>":{"<组名>":["<插件名>",…]}}}`。
 - `skse install`  一键：由游戏版本推出运行时 dll（`skse64_<a>_<b>_<c>.dll`）→ 已就绪则不做任何事 → 否则在 Nexus（mod 30379）选主文件，下载（已下载则复用），装为根目录型 mod `SKSE64` → 校验 dll 与游戏匹配。需要 Nexus API key 与游戏层 host 库。幂等。错误码 `skse_mismatch`：最新的 SKSE64 还不支持该游戏版本。data：`{game_version,runtime_dll,installed,mod_name,file_name,file_id,downloaded}`。
 
+### 面向 Agent 的命令（详见 docs/AGENT.md）
+
+- `schema`  自描述。data：`{tool,version,envelope,exit_codes,errors:[{code,hint}],global_options,commands:[{name,summary,effects[],needs[],confirm,idempotent,positionals[],options[{name,long,short,takes_value,description}]}]}`。`effects` ∈ `read|instance|farm|prefix|game_dir|launch|network`；`needs` ∈ `instance|nexus_key|host`；`confirm:true` = 执行前应向用户确认（`run`、`overwrite promote`）。
+- `next`  只读。data：`{ready,instance,steps:[{id,why,command[],effects,blocking,needs_human,confirm}]}`。来源：`doctor` 的各项检查（带 `fix` 的给出可直接执行的 argv，没有 `fix` 的 `needs_human:true`）、未完成的集合安装、缺少 Nexus key。`ready` = 没有 blocking 步骤；此时最后一步是 `run`（`confirm:true`）。没有实例时第一步是 `instance init`。
+- `logs [--file NAME] [--tail N]`  只读。列出前缀里 `My Games/Skyrim Special Edition/SKSE/` 的日志文件（新→旧），或读取其中一个的最后 N 行（默认 80、最多 2000）。data：`{dir,files:[{name,size,modified}],name,tail}`。`NAME` 只能是目录内的纯文件名。
+- 所有错误条目（`errors[]`）与警告多了 `hint` 字段：对该错误码的默认下一步建议。`doctor` 的每项检查多了 `fix`（argv 数组，空 = 需要人处理）。
+
 ### Nexus 搜索与按 id 安装
 
 - `nexus search QUERY [--sort relevance|endorsements|downloads|updatedAt] [--count N≤50] [--offset N]`  搜当前游戏的 mod（QUERY 用站内词干匹配；传空串列出榜单）。data：`{game,query,sort,total,mods:[{mod_id,name,author,summary,version,updated_at,endorsements,downloads,installed}]}`；`installed` = 本实例里已有来自该 mod 的安装（靠 meta.ini 的 `modid`）。

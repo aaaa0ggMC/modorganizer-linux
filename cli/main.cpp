@@ -19,6 +19,7 @@
 #include "output.hpp"
 #include "parse.hpp"
 #include "commands.hpp"
+#include "routes.hpp"
 import alib6;
 import std;
 
@@ -29,56 +30,8 @@ using CommandOutput = Command::CommandOutput;
 using cli::Context;
 using cli::Result;
 
-struct RouteEntry {
-    std::string_view path;                    // alib6 路由（'/' 分层，见 Router::add_route）
-    std::string_view name;                    // 规范命令名（envelope.command / 文本渲染）
-    cli::CommandFn fn;
-    std::span<const cli::OptionSpec> specs;   // 该命令的专有选项（空表 = 只用全局选项）
-    std::size_t positionals = 0;              // 期望的位置参数个数
-    std::string_view positional_name;         // 期望 1 个时的参数名（报错用）
-};
-
-constexpr RouteEntry kRoutes[] = {
-    {"version", "version", &cli::run_version, {}, 0, ""},
-    {"game/info", "game info", &cli::run_game_info, {}, 0, ""},
-    {"plugins/list", "plugins list", &cli::run_plugins_list, {}, 0, ""},
-    {"plugins/enable", "plugins enable", &cli::run_plugins_enable, {}, 1, "NAME"},
-    {"plugins/disable", "plugins disable", &cli::run_plugins_disable, {}, 1, "NAME"},
-    {"plugins/move", "plugins move", &cli::run_plugins_move, cli::kOptPluginsMove, 1, "NAME"},
-    {"plugins/sort", "plugins sort", &cli::run_plugins_sort, {}, 0, ""},
-    {"plugins/sync", "plugins sync", &cli::run_plugins_sync, {}, 0, ""},
-    {"overwrite/capture", "overwrite capture", &cli::run_overwrite_capture, {}, 0, ""},
-    {"overwrite/promote", "overwrite promote", &cli::run_overwrite_promote, cli::kOptPromote, 0, ""},
-    {"doctor", "doctor", &cli::run_doctor_cmd, {}, 0, ""},
-    {"nexus/login", "nexus login", &cli::run_nexus_login, cli::kOptNexusLogin, 0, ""},
-    {"nexus/logout", "nexus logout", &cli::run_nexus_logout, {}, 0, ""},
-    {"nexus/whoami", "nexus whoami", &cli::run_nexus_whoami, {}, 0, ""},
-    {"nexus/search", "nexus search", &cli::run_nexus_search, cli::kOptSearch, 1, "QUERY"},
-    {"nexus/info", "nexus info", &cli::run_nexus_info, cli::kOptNexusInfo, 0, ""},
-    {"nexus/install", "nexus install", &cli::run_nexus_install, cli::kOptNexusInstall, 0, ""},
-    {"collection/search", "collection search", &cli::run_collection_search, cli::kOptSearch, 1, "QUERY"},
-    {"nexus/files", "nexus files", &cli::run_nexus_files, cli::kOptNexusFiles, 0, ""},
-    {"nexus/download", "nexus download", &cli::run_nexus_download, cli::kOptNexusDownload, 0, ""},
-    {"skse/install", "skse install", &cli::run_skse_install, {}, 0, ""},
-    {"collection/inspect", "collection inspect", &cli::run_collection_inspect, cli::kOptCollectionInspect, 1, "COLLECTION"},
-    {"collection/install", "collection install", &cli::run_collection_install, cli::kOptCollectionInstall, 1, "COLLECTION"},
-    {"collection/status", "collection status", &cli::run_collection_status, {}, 1, "COLLECTION"},
-    {"collection/resolve", "collection resolve", &cli::run_collection_resolve, cli::kOptCollectionResolve, 1, "COLLECTION"},
-    {"run", "run", &cli::run_run, cli::kOptRun, 0, ""},
-    {"instance/init", "instance init", &cli::run_instance_init, cli::kOptInstanceInit, 0, ""},
-    {"instance/show", "instance show", &cli::run_instance_show, {}, 0, ""},
-    {"mods/list", "mods list", &cli::run_mods_list, {}, 0, ""},
-    {"mods/enable", "mods enable", &cli::run_mods_enable, {}, 1, "NAME"},
-    {"mods/disable", "mods disable", &cli::run_mods_disable, {}, 1, "NAME"},
-    {"mods/install", "mods install", &cli::run_mods_install, cli::kOptModsInstall, 1, "ARCHIVE"},
-    {"fomod/inspect", "fomod inspect", &cli::run_fomod_inspect, cli::kOptFomodInspect, 1, "ARCHIVE"},
-    {"mods/move", "mods move", &cli::run_mods_move, cli::kOptModsMove, 1, "NAME"},
-    {"conflicts", "conflicts", &cli::run_conflicts, cli::kOptConflicts, 0, ""},
-    {"plan", "plan", &cli::run_plan, {}, 0, ""},
-    {"status", "status", &cli::run_status, {}, 0, ""},
-    {"apply", "apply", &cli::run_apply, {}, 0, ""},
-    {"unlink", "unlink", &cli::run_unlink, {}, 0, ""},
-};
+using cli::RouteEntry;
+using cli::kRoutes;
 
 // 一次调用的可变状态（handler 通过 lambda 把结果写回这里）
 struct Invocation {

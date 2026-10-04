@@ -116,4 +116,33 @@ with tempfile.TemporaryDirectory(prefix='mol-cli-check-', dir='/tmp') as tmp:
     assert data['errors'][0]['code'] == 'game_unavailable'
     assert result.stderr == ''
 
+
+# ---- schema：每个命令都有元数据、全局选项与错误码齐全 ----
+data, _ = call('-j', 'schema')
+cmds = data['data']['commands']
+assert len(cmds) >= 40, len(cmds)
+missing = [c['name'] for c in cmds if 'summary' not in c or 'effects' not in c]
+assert not missing, missing
+names = {c['name'] for c in cmds}
+for must in ('run', 'next', 'schema', 'doctor', 'collection install', 'nexus install', 'overwrite promote'):
+    assert must in names, must
+by = {c['name']: c for c in cmds}
+assert by['run']['confirm'] is True and 'launch' in by['run']['effects']
+assert by['overwrite promote']['confirm'] is True
+assert by['status']['effects'] == ['read']
+assert set(data['data']['exit_codes']) == {'0', '1', '2', '3', '4'}
+assert any(e['code'] == 'nexus_auth' and e['hint'] for e in data['data']['errors'])
+assert any(o['long'] == '--json' for o in data['data']['global_options'])
+checks += 1
+# 错误自带 hint
+data, _ = call('-j', '-i', str(root / 'nowhere'), 'mods', 'list', code=1)
+assert data['errors'][0]['code'] == 'instance_not_found' and 'instance init' in data['errors'][0]['hint']
+checks += 1
+# next：没有实例 → 第一步是 instance init；有实例 → 有 steps 与 ready 字段
+data, _ = call('-j', '-i', str(root / 'nowhere'), 'next')
+assert data['data']['ready'] is False and data['data']['steps'][0]['id'] == 'instance.init'
+data, _ = call('-j', '-i', str(instance), 'next')
+assert 'ready' in data['data'] and isinstance(data['data']['steps'], list)
+checks += 1
+
 print(f'CLI integration: {checks} checks passed')

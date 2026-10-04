@@ -34,8 +34,10 @@ Result run_doctor_cmd(Context& ctx) {
     for (const auto& c : checks) {
         if (c.level == "error") ++d.errors;
         else if (c.level == "warn") ++d.warnings;
-        d.checks.push_back(CheckRow{std::pmr::string(c.id, ctx.mem), std::pmr::string(c.level, ctx.mem),
-                                    std::pmr::string(c.message, ctx.mem), std::pmr::string(c.hint, ctx.mem)});
+        CheckRow row{std::pmr::string(c.id, ctx.mem), std::pmr::string(c.level, ctx.mem), std::pmr::string(c.message, ctx.mem),
+                     std::pmr::string(c.hint, ctx.mem), std::pmr::vector<std::pmr::string>(ctx.mem)};
+        for (const auto& f : c.fix) row.fix.push_back(std::pmr::string(f, ctx.mem));
+        d.checks.push_back(std::move(row));
     }
     Result r(ctx.mem);
     r.ok = true;

@@ -8,16 +8,40 @@
 
 namespace cli {
 
+std::string_view default_hint(std::string_view code) {
+    struct H { std::string_view code, hint; };
+    static constexpr H table[] = {
+        {"instance_not_found", "create one with `mo-linux instance init` (Steam paths are auto-detected), or pass -i DIR / set MOL_INSTANCE"},
+        {"config_invalid", "fix or delete the named file; `mo-linux doctor` shows what is wrong"},
+        {"profile_not_found", "create it with `mo-linux instance init -p NAME`"},
+        {"mod_not_found", "list what exists with `mods list` / `plugins list`"},
+        {"invalid_argument", "see the command's options with `mo-linux schema`"},
+        {"farm_not_owned", "the farm directory holds files mo-linux did not create; empty it or choose another farm_dir"},
+        {"farm_conflict", "a real file sits where a link must go; run `mo-linux overwrite capture`, or remove the file"},
+        {"farm_busy", "the game is still running: ask the user to close it, then retry"},
+        {"io_error", "check the path named in the error (permissions, disk space)"},
+        {"game_unavailable", "libmo-game.so was not found or failed to load: set MOL_GAME_LIB or build with MOL_BUILD_HOST=ON"},
+        {"network_error", "check the network (set https_proxy if needed) and retry"},
+        {"nexus_auth", "ask the user for a Nexus personal API key (nexusmods.com/users/myaccount?tab=api) and run `mo-linux nexus login`; never print or store the key anywhere else"},
+        {"nexus_premium", "a free Nexus account cannot download directly: ask the user for an nxm:// link and use `nexus download --nxm LINK`"},
+        {"nexus_not_found", "check the id/slug with `nexus search` / `collection search`"},
+        {"nexus_rate_limited", "wait before retrying (see the message); do not loop"},
+        {"skse_mismatch", "the newest SKSE64 does not support this game version yet; wait for an update or ask the user to downgrade the game"},
+        {"fomod_choices_required", "run `mo-linux fomod inspect ARCHIVE`, decide the choices, then pass --fomod FILE (or --fomod-defaults / --no-fomod)"},
+    };
+    for (const auto& h : table)
+        if (h.code == code) return h.hint;
+    return {};
+}
+
 void Result::add_error(std::string_view code, std::string_view message, std::string_view path) {
-    errors.push_back(Err{mol::string(code, errors.get_allocator().resource()),
-                         mol::string(message, errors.get_allocator().resource()),
-                         mol::string(path, errors.get_allocator().resource())});
+    auto* mr = errors.get_allocator().resource();
+    errors.push_back(Err{mol::string(code, mr), mol::string(message, mr), mol::string(path, mr), mol::string(default_hint(code), mr)});
 }
 
 void Result::add_warning(std::string_view code, std::string_view message, std::string_view path) {
-    warnings.push_back(Err{mol::string(code, warnings.get_allocator().resource()),
-                           mol::string(message, warnings.get_allocator().resource()),
-                           mol::string(path, warnings.get_allocator().resource())});
+    auto* mr = warnings.get_allocator().resource();
+    warnings.push_back(Err{mol::string(code, mr), mol::string(message, mr), mol::string(path, mr), mol::string(mr)});
 }
 
 Result make_ok(Context& ctx) {

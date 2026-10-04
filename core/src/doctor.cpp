@@ -1,6 +1,7 @@
 #include "mol/doctor.hpp"
 
 #include <filesystem>
+#include <initializer_list>
 #include <string>
 #include <system_error>
 
@@ -39,8 +40,9 @@ namespace {
 struct Sink {
     vector<Check>& out;
     mr* mem;
-    void add(std::string_view id, std::string_view level, std::string_view msg, std::string_view hint = {}) {
+    void add(std::string_view id, std::string_view level, std::string_view msg, std::string_view hint = {}, std::initializer_list<std::string_view> fix = {}) {
         Check c(mem);
+        for (auto f : fix) c.fix.push_back(string(f, mem));
         c.id = string(id, mem);
         c.level = string(level, mem);
         c.message = string(msg, mem);
@@ -90,7 +92,7 @@ vector<Check> run_doctor(const Instance& inst, std::string_view game_version, mr
     if (!game.empty() && fs::is_directory(game, ec)) {
         const bool loader = provided_at_root(inst, game, "skse64_loader.exe", mem);
         if (!loader) {
-            s.add("skse.loader", "warn", "SKSE64 is not installed (skse64_loader.exe missing)", "optional; needed by most script mods");
+            s.add("skse.loader", "warn", "SKSE64 is not installed (skse64_loader.exe missing)", "optional; needed by most script mods", {"skse", "install"});
         } else if (game_version.empty()) {
             s.add("skse.version", "warn", "SKSE64 installed, cannot compare with the game version");
         } else {
@@ -98,7 +100,7 @@ vector<Check> run_doctor(const Instance& inst, std::string_view game_version, mr
             if (dll.empty()) s.add("skse.version", "warn", "cannot derive the SKSE runtime name from game version " + std::string(game_version));
             else if (provided_at_root(inst, game, dll, mem)) s.add("skse.version", "ok", "SKSE64 runtime " + std::string(dll) + " matches the game");
             else s.add("skse.version", "error", "SKSE64 does not match the game: " + std::string(dll) + " not found; the loader will refuse to start",
-                       "install the SKSE64 build for game version " + std::string(game_version));
+                       "install the SKSE64 build for game version " + std::string(game_version), {"skse", "install"});
         }
     }
 
@@ -143,11 +145,11 @@ vector<Check> run_doctor(const Instance& inst, std::string_view game_version, mr
             if (!model.merged.warnings.empty())
                 s.add("farm.warnings", "warn", std::to_string(model.merged.warnings.size()) + " merge warning(s) (case conflicts)", "see `plan` warnings");
             if (!fs::exists(fs::path(std::string(inst.farm_path)) / kFarmMarker, ec))
-                s.add("farm", "warn", "farm not created yet", "run `apply`");
+                s.add("farm", "warn", "farm not created yet", "run `apply`", {"apply"});
             else if (plan.ops.empty())
                 s.add("farm", "ok", "farm in sync");
             else
-                s.add("farm", "warn", "farm is out of sync: " + std::to_string(plan.ops.size()) + " pending op(s)", "run `apply`");
+                s.add("farm", "warn", "farm is out of sync: " + std::to_string(plan.ops.size()) + " pending op(s)", "run `apply`", {"apply"});
         } catch (const Error& e) {
             s.add("farm", "error", e.what(), e.code);
         }
@@ -169,9 +171,9 @@ vector<Check> run_doctor(const Instance& inst, std::string_view game_version, mr
                               "install the missing master or disable " + std::string(is.plugin));
                     else if (k == "disabled")
                         s.add("plugins.masters", "error", std::string(is.plugin) + " requires " + std::string(is.master) + ", which is disabled",
-                              "enable " + std::string(is.master));
+                              "enable " + std::string(is.master), {"plugins", "enable", std::string_view(is.master)});
                     else
-                        s.add("plugins.masters", "warn", std::string(is.plugin) + " is loaded before its master " + std::string(is.master), "run `plugins sort`");
+                        s.add("plugins.masters", "warn", std::string(is.plugin) + " is loaded before its master " + std::string(is.master), "run `plugins sort`", {"plugins", "sort"});
                 }
             }
         } catch (const Error& e) {
@@ -183,8 +185,8 @@ vector<Check> run_doctor(const Instance& inst, std::string_view game_version, mr
     const fs::path appdata = prefix / "drive_c/users" / std::string(inst.cfg.prefix_user) / "AppData/Local/Skyrim Special Edition/plugins.txt";
     const auto st = fs::symlink_status(appdata, ec);
     if (fs::is_symlink(st)) s.add("plugins.link", "ok", "plugins.txt is linked to the profile");
-    else if (fs::exists(st)) s.add("plugins.link", "warn", "plugins.txt in the prefix is a real file, not linked to the profile", "run `plugins sync` (the file is kept as .mol-backup)");
-    else s.add("plugins.link", "warn", "plugins.txt is not linked yet", "run `plugins sync`");
+    else if (fs::exists(st)) s.add("plugins.link", "warn", "plugins.txt in the prefix is a real file, not linked to the profile", "run `plugins sync` (the file is kept as .mol-backup)", {"plugins", "sync"});
+    else s.add("plugins.link", "warn", "plugins.txt is not linked yet", "run `plugins sync`", {"plugins", "sync"});
     return out;
 }
 

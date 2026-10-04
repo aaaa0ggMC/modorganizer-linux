@@ -129,6 +129,26 @@ std::pmr::vector<std::pmr::string> render_text(const Result& r, mol::mr* mem) {
         add(lines, "game " + S(r.data, "gameDirectory"), mem);
         add(lines, "data " + S(r.data, "dataDirectory"), mem);
         add(lines, "binary " + S(r.data, "binaryName"), mem);
+    } else if (cmd == "next") {
+        add(lines, adata::boolean(r.data, "ready") ? "ready" : "not ready yet", mem);
+        for (const auto& st : r.data.object().find("steps").second().array()) {
+            std::string c;
+            for (const auto& a : st.object().find("command").second().array()) c += " " + std::string(a.try_to<std::string_view>().value_or(""));
+            std::string line = std::string(adata::boolean(st, "blocking") ? "  * " : "  - ") + S(st, "id") + ": " + S(st, "why");
+            if (!c.empty()) line += "\n      mo-linux" + c;
+            if (adata::boolean(st, "needs_human")) line += "   [needs the user]";
+            if (adata::boolean(st, "confirm")) line += "   [confirm first]";
+            add(lines, line, mem);
+        }
+    } else if (cmd == "schema") {
+        for (const auto& c : r.data.object().find("commands").second().array()) add(lines, S(c, "name") + " - " + S(c, "summary"), mem);
+    } else if (cmd == "logs") {
+        add(lines, "log directory: " + S(r.data, "dir"), mem);
+        if (S(r.data, "name").empty()) {
+            for (const auto& f : r.data.object().find("files").second().array()) add(lines, "  " + S(f, "name") + "  (" + std::to_string(adata::integer(f, "size")) + " bytes)", mem);
+        } else {
+            add(lines, S(r.data, "tail"), mem);
+        }
     } else if (cmd == "doctor") {
         const auto& checks = r.data.object().find("checks").second().array();
         for (const auto& c : checks) {
@@ -230,6 +250,7 @@ std::pmr::vector<std::pmr::string> render_diagnostics(const Result& r, mol::mr* 
     for (const Err& e : r.errors) {
         std::string line = "error[" + std::string(e.code) + "]: " + std::string(e.message);
         if (!e.path.empty()) line += " (" + std::string(e.path) + ")";
+        if (!e.hint.empty()) line += "\n  hint: " + std::string(e.hint);
         add(lines, line, mem);
     }
     return lines;

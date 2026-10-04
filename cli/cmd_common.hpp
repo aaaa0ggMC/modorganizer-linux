@@ -103,6 +103,8 @@ using CommandFn = Result (*)(Context&);
 
 // ---- 结果构造 --------------------------------------------------------------
 Result make_ok(Context& ctx);                                            // data=空对象
+// 错误码 → 给人/Agent 的默认下一步建议（无则空）。
+std::string_view default_hint(std::string_view code);
 Result make_usage_error(std::string_view message, Context& ctx);
 // 从 --fomod / --fomod-defaults / --no-fomod 构造安装选项（三者互斥，否则 Error{invalid_argument}）。
 // 选择了 Defaults/Choices 时顺带填好 FOMOD 条件求值要用的游戏版本与脚本扩展版本。

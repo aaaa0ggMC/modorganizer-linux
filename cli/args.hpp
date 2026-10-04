@@ -126,6 +126,10 @@ constexpr OptionSpec kOptCollectionResolve[] = {
     {"archive", "", "--archive", "Use this archive file for the mod", true},
     {"nxm", "", "--nxm", "nxm:// link (free Nexus accounts): downloads the file for this mod", true},
 };
+constexpr OptionSpec kOptLogs[] = {
+    {"file", "", "--file", "Log file name inside the log directory (omit to list files)", true},
+    {"tail", "", "--tail", "Number of trailing lines to show (default 80, max 2000)", true},
+};
 constexpr OptionSpec kOptConflicts[] = {
     {"mod", "", "--mod", "Only conflicts involving this mod", true},
 };

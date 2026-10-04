@@ -25,6 +25,7 @@ struct Err {
     std::pmr::string code;
     std::pmr::string message;
     std::pmr::string path;  // 可空
+    std::pmr::string hint;  // 可空：给人/Agent 的下一步建议（可执行命令用反引号包起来）
 };
 
 // ---- version --------------------------------------------------------------
@@ -151,6 +152,7 @@ struct CheckRow {
     std::pmr::string level;  // ok|warn|error
     std::pmr::string message;
     std::pmr::string hint;
+    std::pmr::vector<std::pmr::string> fix;  // 可执行的修复命令 argv（不含程序名），空 = 需要人处理
 };
 struct DoctorData {
     std::size_t errors = 0;
@@ -378,6 +380,33 @@ struct NexusInstallData {
     std::pmr::vector<CollectionPendingRow> pending; // 需要人介入的项（kind 同 collection）
     std::pmr::vector<NexusRequirementRow> external_requirements;
     std::pmr::vector<std::pmr::string> dlc_requirements;
+};
+
+// ---- next / logs ------------------------------------------------------------
+struct NextStep {
+    std::pmr::string id;       // 稳定标识，如 "instance.init"、"skse.install"
+    std::pmr::string why;
+    std::pmr::vector<std::pmr::string> command;  // mo-linux 子命令 argv（不含程序名）；空 = 需要人手工处理
+    std::pmr::string effects;  // 同 schema 的 effects
+    bool blocking = false;     // true = 不做完就还没就绪
+    bool needs_human = false;  // true = Agent 不能自己完成（要向用户索取信息/让用户操作）
+    bool confirm = false;      // true = 执行前应向用户确认
+};
+struct NextData {
+    bool ready = false;        // 没有 blocking 步骤
+    std::pmr::string instance; // 解析出的实例目录
+    std::pmr::vector<NextStep> steps;
+};
+struct LogFileRow {
+    std::pmr::string name;
+    std::int64_t size = 0;
+    std::int64_t modified = 0;  // unix 秒
+};
+struct LogsData {
+    std::pmr::string dir;
+    std::pmr::vector<LogFileRow> files;  // 按修改时间新→旧
+    std::pmr::string name;               // 指定了 NAME 时
+    std::pmr::string tail;               // 该文件的最后 N 行
 };
 
 // ---- run --------------------------------------------------------------------
