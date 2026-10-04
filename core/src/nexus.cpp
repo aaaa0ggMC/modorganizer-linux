@@ -5,6 +5,7 @@
 #include <unistd.h>
 
 #include <algorithm>
+#include <functional>
 #include <cstdlib>
 #include <filesystem>
 #include <fstream>
@@ -414,6 +415,48 @@ NexusModInfo NexusClient::mod_info(std::string_view domain, std::int64_t mod_id,
                 if (const auto* ge = get_sub(d, "gameExpansion")) info.dlc_requirements.push_back(string(str_of(*ge, "name"), mem));
     }
     return info;
+}
+
+std::map<std::int64_t, NexusModSummary> NexusClient::mod_summaries(std::string_view domain, std::span<const std::int64_t> ids, mr* mem) const {
+    std::map<std::int64_t, NexusModSummary> out;
+    if (ids.empty()) return out;
+    alib6::AData gdoc(mem);
+    if (!gdoc.load_from_memory(graphql("{game(domainName:\"" + json_escape(domain) + "\"){id}}", mem))) bad_json("game");
+    std::int64_t gid = 0;
+    if (const auto* d = get_sub(gdoc, "data")) if (const auto* g = get_sub(*d, "game")) gid = num_of(*g, "id");
+    if (gid == 0) throw Error("nexus_not_found", "unknown game domain: " + std::string(domain));
+    // 一个已下架的 mod 会让整批返回 NOT_FOUND 且 data=null：二分重试，把坏 id 隔离出来跳过。
+    std::function<void(std::span<const std::int64_t>)> fetch = [&](std::span<const std::int64_t> chunk) {
+        if (chunk.empty()) return;
+        std::string q = "{";
+        for (std::size_t i = 0; i < chunk.size(); ++i)
+            q += "m" + std::to_string(i) + ":mod(modId:\"" + std::to_string(chunk[i]) + "\",gameId:\"" + std::to_string(gid) + "\"){modId name author endorsements downloads summary version updatedAt} ";
+        q += "}";
+        string body(mem);
+        try {
+            body = graphql(q, mem);
+        } catch (const Error& e) {
+            if (e.code != "nexus_not_found") throw;
+            if (chunk.size() == 1) return;
+            const std::size_t half = chunk.size() / 2;
+            fetch(chunk.first(half));
+            fetch(chunk.subspan(half));
+            return;
+        }
+        alib6::AData doc(mem);
+        if (!doc.load_from_memory(body) || !doc.is_object()) bad_json("mods");
+        const auto* data = get_sub(doc, "data");
+        if (!data || !data->is_object()) return;
+        for (const auto& [k, v] : data->object()) {
+            (void)k;
+            if (!v.is_object()) continue;
+            NexusModSummary m = parse_mod_summary(v, mem);
+            if (m.mod_id > 0) out.emplace(m.mod_id, std::move(m));
+        }
+    };
+    constexpr std::size_t kBatch = 40;
+    for (std::size_t base = 0; base < ids.size(); base += kBatch) fetch(ids.subspan(base, std::min(kBatch, ids.size() - base)));
+    return out;
 }
 
 vector<NexusCollectionSummary> NexusClient::search_collections(std::string_view domain, std::string_view text, std::string_view sort, int count, int offset, std::int64_t* total, mr* mem) const {

@@ -4,7 +4,9 @@
 // 基址可用环境变量 MOL_NEXUS_API 覆盖（测试用）。key 永远不进日志、不进 JSON 输出。
 #include <cstdint>
 #include <functional>
+#include <map>
 #include <optional>
+#include <span>
 #include <string_view>
 
 #include "mol/error.hpp"
@@ -181,6 +183,8 @@ public:
                                         std::int64_t* total = nullptr, mr* mem = default_mr()) const;
     // mod 详情与需求（站内需求 + 外部需求 + DLC 需求）。不存在 → Error{nexus_not_found}。
     NexusModInfo mod_info(std::string_view game_domain, std::int64_t mod_id, mr* mem = default_mr()) const;
+    // 批量取 mod 的当前版本（一次请求最多 50 个，内部自动分批）。查不到的 id 不出现在结果里。
+    std::map<std::int64_t, NexusModSummary> mod_summaries(std::string_view game_domain, std::span<const std::int64_t> ids, mr* mem = default_mr()) const;
     // 搜索集合。sort ∈ endorsements|downloads|updatedAt|relevance。
     vector<NexusCollectionSummary> search_collections(std::string_view game_domain, std::string_view text, std::string_view sort, int count, int offset,
                                                       std::int64_t* total = nullptr, mr* mem = default_mr()) const;

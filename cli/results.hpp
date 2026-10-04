@@ -465,6 +465,20 @@ struct WjInstallData {
     std::pmr::vector<std::pmr::string> failures;
 };
 
+struct OutdatedRow {
+    std::pmr::string name;
+    std::int64_t nexus_id = 0;
+    std::pmr::string installed_version;
+    std::pmr::string latest_version;
+    bool outdated = false;  // 版本字符串不同（不是语义化比较）
+    std::pmr::string updated_at;
+};
+struct OutdatedData {
+    std::int64_t checked = 0;
+    std::int64_t outdated_count = 0;
+    std::pmr::vector<OutdatedRow> mods;
+};
+
 // ---- run --------------------------------------------------------------------
 struct RunData {
     std::pmr::string exe;

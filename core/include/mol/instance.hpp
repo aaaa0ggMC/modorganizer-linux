@@ -101,15 +101,16 @@ struct ModInfo {
     bool separator = false;
     bool exists = false;     // mods/<name> 目录是否存在（分隔符恒为 false）
     std::int64_t nexus_id = 0;  // mods/<name>/meta.ini 的 [General] modid（MO2 兼容；0 = 未知）
+    string version;             // meta.ini 的 [General] version（可空）
     bool root = false;       // mods/<name>/meta.ini 的 [General] mol_root=true：目录结构镜像游戏根（映射到农场根而非 Data/）
     std::size_t priority = 0;  // 0 = 最低优先级（低→高序号）
     string path;               // 绝对路径（分隔符为空）
 
-    explicit ModInfo(allocator_type a = {}) : name(a), path(a) {}
+    explicit ModInfo(allocator_type a = {}) : name(a), version(a), path(a) {}
     ModInfo(const ModInfo& o, allocator_type a)
-        : name(o.name, a), enabled(o.enabled), separator(o.separator), exists(o.exists), nexus_id(o.nexus_id), root(o.root), priority(o.priority), path(o.path, a) {}
+        : name(o.name, a), version(o.version, a), enabled(o.enabled), separator(o.separator), exists(o.exists), nexus_id(o.nexus_id), root(o.root), priority(o.priority), path(o.path, a) {}
     ModInfo(ModInfo&& o, allocator_type a)
-        : name(std::move(o.name), a), enabled(o.enabled), separator(o.separator), exists(o.exists), nexus_id(o.nexus_id), root(o.root), priority(o.priority), path(std::move(o.path), a) {}
+        : name(std::move(o.name), a), version(std::move(o.version), a), enabled(o.enabled), separator(o.separator), exists(o.exists), nexus_id(o.nexus_id), root(o.root), priority(o.priority), path(std::move(o.path), a) {}
     ModInfo(const ModInfo&) = default;
     ModInfo(ModInfo&&) = default;
     ModInfo& operator=(const ModInfo&) = default;

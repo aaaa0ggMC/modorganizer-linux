@@ -308,6 +308,10 @@ bool install_one(Context& ctx, const mol::Instance& inst, const mol::NexusClient
         mol::set_mod_meta(res.path, "gameName", domain);
         mol::set_mod_meta(res.path, "modid", std::to_string(mod_id));
         mol::set_mod_meta(res.path, "fileid", std::to_string(file_id));
+        try {   // 记下安装的文件版本，供 `mods outdated` 比较
+            for (const auto& f : client.mod_files(domain, mod_id, ctx.mem))
+                if (f.file_id == file_id && !f.version.empty()) { mol::set_mod_meta(res.path, "version", f.version); break; }
+        } catch (const mol::Error&) {}
         row.status = "installed";
         row.mod_dir = std::pmr::string(res.name, ctx.mem);
         have.insert(mod_id);

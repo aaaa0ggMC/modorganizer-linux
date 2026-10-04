@@ -238,3 +238,33 @@ TEST(graphql_search_info_and_collections) {
     // GraphQL 的 errors 字段被转成异常
     CHECK_EQ(code_of([&] { c.graphql("{nothing}"); }), std::string("network_error"));
 }
+
+TEST(mod_summaries_batches_and_isolates_deleted_mods) {
+    std::atomic<int> calls{0};
+    Mock srv([&](const Req& r) -> Resp {
+        if (r.body.find("game(domainName") != std::string::npos) return {200, R"({"data":{"game":{"id":1704}}})", ""};
+        ++calls;
+        if (r.body.find("modId:\\\"999\\\"") != std::string::npos) return {200, R"({"errors":[{"message":"Mod not found"}],"data":null})", ""};
+        // 为请求里出现的每个 modId 回一个对象
+        std::string out = R"({"data":{)";
+        bool first = true;
+        for (std::size_t pos = 0; (pos = r.body.find("modId:\\\"", pos)) != std::string::npos; pos += 8) {
+            const std::size_t b = pos + 8, e = r.body.find('\\', b);
+            const std::string id = r.body.substr(b, e - b);
+            if (!first) out += ",";
+            first = false;
+            out += "\"m" + id + "\":{\"modId\":" + id + ",\"name\":\"M" + id + "\",\"version\":\"v" + id + "\"}";
+        }
+        out += "}}";
+        return {200, out, ""};
+    });
+    NexusClient c("K", "1", srv.base());
+    const std::vector<std::int64_t> ids{1, 2, 999, 3};
+    const auto m = c.mod_summaries("skyrimspecialedition", ids);
+    CHECK_EQ(m.size(), std::size_t{3});               // 999 被隔离跳过，其余都拿到
+    CHECK_EQ(std::string(m.at(1).version), std::string("v1"));
+    CHECK_EQ(std::string(m.at(3).version), std::string("v3"));
+    CHECK(m.count(999) == 0);
+    CHECK(calls.load() > 1);                          // 发生过二分重试
+    CHECK(c.mod_summaries("skyrimspecialedition", std::span<const std::int64_t>{}).empty());
+}

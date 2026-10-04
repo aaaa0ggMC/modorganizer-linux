@@ -47,6 +47,7 @@ Result run_mods_enable(Context&);
 Result run_mods_disable(Context&);
 Result run_mods_move(Context&);
 Result run_mods_install(Context&);
+Result run_mods_outdated(Context&);
 Result run_conflicts(Context&);
 Result run_plan(Context&);
 Result run_status(Context&);

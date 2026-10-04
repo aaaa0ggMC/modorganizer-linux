@@ -6,6 +6,7 @@
 #include "mol/casefold.hpp"
 #include "mol/instance.hpp"
 #include "mol/mod_install.hpp"
+#include "mol/nexus.hpp"
 #include "mol/fomod.hpp"
 
 #include "commands.hpp"
@@ -151,6 +152,38 @@ Result run_mods_install(Context& ctx) {
     r.exit_code = 0;
     r.command = ctx.command;
     for (const auto& m : res.missing) r.add_warning("fomod_missing_source", "FOMOD references a file that is not in the archive", m);
+    r.set_data(std::move(d));
+    return r;
+}
+
+Result run_mods_outdated(Context& ctx) {
+    const mol::Instance inst = mol::load_instance(ctx.instance_dir, ctx.profile_override(), ctx.mem);
+    const auto key = mol::load_nexus_key(ctx.mem);
+    if (!key) throw mol::Error("nexus_auth", "no Nexus API key (set NEXUS_API_KEY or run `nexus login`)");
+    const mol::NexusClient client(*key, "0.1");
+    std::vector<std::int64_t> ids;
+    const auto mods = mol::list_mods(inst, ctx.profile_override(), ctx.mem);
+    for (const auto& m : mods) if (m.nexus_id > 0 && m.exists) ids.push_back(m.nexus_id);
+    std::sort(ids.begin(), ids.end());
+    ids.erase(std::unique(ids.begin(), ids.end()), ids.end());
+    const auto latest = client.mod_summaries(mol::nexus_game_domain(inst.cfg.game, ctx.mem), ids, ctx.mem);
+    OutdatedData d{.checked = static_cast<std::int64_t>(ids.size()), .outdated_count = 0, .mods = std::pmr::vector<OutdatedRow>(ctx.mem)};
+    for (const auto& m : mods) {
+        if (m.nexus_id <= 0 || !m.exists) continue;
+        OutdatedRow row{.name = std::pmr::string(m.name, ctx.mem), .nexus_id = m.nexus_id, .installed_version = std::pmr::string(m.version, ctx.mem),
+                        .latest_version = std::pmr::string(ctx.mem), .outdated = false, .updated_at = std::pmr::string(ctx.mem)};
+        if (auto it = latest.find(m.nexus_id); it != latest.end()) {
+            row.latest_version = std::pmr::string(it->second.version, ctx.mem);
+            row.updated_at = std::pmr::string(it->second.updated_at, ctx.mem);
+            row.outdated = !m.version.empty() && !it->second.version.empty() && m.version != it->second.version;
+        }
+        if (row.outdated) ++d.outdated_count;
+        d.mods.push_back(std::move(row));
+    }
+    Result r(ctx.mem);
+    r.ok = true;
+    r.exit_code = 0;
+    r.command = ctx.command;
     r.set_data(std::move(d));
     return r;
 }

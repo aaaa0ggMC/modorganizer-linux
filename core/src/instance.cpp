@@ -278,6 +278,7 @@ vector<ModInfo> list_mods(const Instance& inst, std::string_view profile, mr* me
                 m.path.assign(d->string());
                 const Ini meta = Ini::load(S((*d / "meta.ini").string()), mem);
                 if (auto v = meta.get("General", "mol_root", mem)) m.root = (*v == "true" || *v == "1");
+                if (auto v = meta.get("General", "version", mem)) m.version = *v;
                 if (auto v = meta.get("General", "modid", mem)) {
                     std::int64_t id = 0;
                     for (char c : *v) { if (c < '0' || c > '9') { id = 0; break; } id = id * 10 + (c - '0'); }

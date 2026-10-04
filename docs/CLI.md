@@ -76,7 +76,8 @@
 - `nexus info --mod ID`  data：`{mod:{…同上},category,requirements:[{mod_id,name,external,url,notes,installed}],dlc_requirements:[…]}`。`requirements` 是作者在站内声明的前置（`external:true` 的是站外工具，`url` 给出下载页）。
 - `nexus install --mod ID [--file ID] [--name N] [--requirements] [--fomod F | --fomod-defaults | --no-fomod]`  取主文件（`is_primary` 优先）→ 下载 → 安装 → 写 MO2 兼容的 `meta.ini`（`gameName/modid/fileid`）。目录名默认取站内 mod 名。`--requirements` 递归先装站内前置（深度 ≤4，已装的跳过，自动用 FOMOD 默认值）。**幂等**：已装过（meta.ini 的 modid 匹配）直接 `already_installed`。data：`{status:"complete"|"incomplete",mods:[{mod_id,name,status,mod_dir,note}],pending:[…同 collection 的 pending],external_requirements:[…],dlc_requirements:[…]}`；FOMOD 缺选择/免费账号无法直连 → pending + 退出码 4（与 collection 相同的「incomplete」协议）。
 - `collection search QUERY [--sort …] [--count N] [--offset N]`  搜集合。data：`{game,query,sort,total,collections:[{slug,name,summary,endorsements,downloads,revision,mod_count,total_size}]}`。拿到 slug 后用 `collection inspect/install`。
-- `mods list` 每行多了 `nexus_id`。
+- `mods list` 每行多了 `nexus_id`；`meta.ini` 里的 `version` 也会读（`mods outdated` 用）。
+- `mods outdated`  对所有带 `modid` 的 mod，一次（分批）请求取站上当前版本并对比。data：`{checked,outdated_count,mods:[{name,nexus_id,installed_version,latest_version,outdated,updated_at}]}`。`outdated` 只是版本字符串不同，**不是语义化比较**（且站上 mod 的版本字段可能与具体文件版本不同）；已下架的 mod 会被跳过（`latest_version` 为空）。`nexus install` 与 `collection install` 会写 `modid/fileid/version`，旧实例重跑一次 `collection install` 会补写。
 
 ### Wabbajack 整合包
 

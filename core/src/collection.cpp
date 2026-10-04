@@ -392,6 +392,13 @@ Report install_collection(const Instance& inst, const NexusClient* client, const
             ++rep.installed;
             final_names.emplace_back(ms.mod_dir);
             rep.mods.push_back(out);
+            if (m.source.type == "nexus" && m.source.mod_id > 0) {  // 早期版本装的没有来源信息：补写（幂等）
+                const std::string md = (fs::path(std::string(inst.mods_dir)) / ms.mod_dir).string();
+                set_mod_meta(md, "gameName", m.domain.empty() ? std::string(nexus_game_domain(inst.cfg.game)) : m.domain);
+                set_mod_meta(md, "modid", std::to_string(m.source.mod_id));
+                set_mod_meta(md, "fileid", std::to_string(m.source.file_id));
+                if (!m.version.empty()) set_mod_meta(md, "version", m.version);
+            }
             continue;
         }
         if (ov.skip || (m.optional && !opt.include_optional)) {
