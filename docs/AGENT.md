@@ -49,6 +49,16 @@ Then run the **same command again**. Finished mods are not redone; downloaded ar
 
 FOMOD choices file: `{"steps":{"<step>":{"<group>":["<plugin>", …]}}}`. `fomod inspect --choices FILE` re-evaluates later steps for the choices so far (steps and plugin types depend on flags set earlier), so loop on it until every visible group has an entry.
 
+## Wabbajack mod lists
+
+```
+mo-linux -j wabbajack search "essentials"       # smallest first; NSFW hidden unless --nsfw
+mo-linux -j wabbajack inspect MACHINE_URL       # verdict + sources + unsupported directives — decide before downloading GBs
+mo-linux -j -i ~/lists/NAME wabbajack install MACHINE_URL   # -i is the OUTPUT instance; exit 4 = pending
+```
+
+Same incomplete protocol: `manual_download` rows (Mega, MediaFire, Google Drive, free-account Nexus…) carry the archive name and page `url`; the user puts the file into `<instance>/downloads/` (any file name: it is matched by size + xxh64) and you run `install` again. `game_file_missing` / hash mismatches on `gamefile` archives mean the game version differs from the one the list was built for.
+
 ## Where a human must be involved
 
 - **Starting the game** (`run`): always confirm. It launches a real process and writes the user's Wine prefix.
@@ -84,4 +94,4 @@ FOMOD choices file: `{"steps":{"<step>":{"<group>":["<plugin>", …]}}}`. `fomod
 
 ## Known limits
 
-LOOT-style sorting is not implemented (`plugins sort` only puts masters first). Wabbajack lists are not installed (see `docs/CLI.md`). Collections: `requires`/`conflicts` rules are reported, not enforced; bundled sources and binary patches are `unsupported`. Writes by the game *through* an existing symlink land in the original file (see HANDBOOK R13).
+LOOT-style sorting is not implemented (`plugins sort` only puts masters first). Wabbajack: `CreateBSA`/`TransformedTexture`/`MergedPatch` directives are not executed (reported as `unsupported`); `wabbajack inspect` tells you up front whether a list is `full`/`partial`/`none` installable. Collections: `requires`/`conflicts` rules are reported, not enforced; bundled sources and binary patches are `unsupported`. Writes by the game *through* an existing symlink land in the original file (see HANDBOOK R13).

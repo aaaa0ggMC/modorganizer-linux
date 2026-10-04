@@ -409,6 +409,62 @@ struct LogsData {
     std::pmr::string tail;               // 该文件的最后 N 行
 };
 
+// ---- wabbajack --------------------------------------------------------------
+struct WjGalleryRow {
+    std::pmr::string title;
+    std::pmr::string machine_url;
+    std::pmr::string repository;
+    std::pmr::string author;
+    std::pmr::string version;
+    std::pmr::string description;
+    std::int64_t download_size = 0;
+    std::int64_t archives_size = 0;
+    std::int64_t installed_size = 0;
+    std::int64_t archive_count = 0;
+    bool nsfw = false;
+    bool unavailable = false;
+};
+struct WjSearchData {
+    std::pmr::string game;
+    std::pmr::string query;
+    std::int64_t total = 0;
+    std::pmr::vector<WjGalleryRow> lists;
+};
+struct WjCount {
+    std::pmr::string name;
+    std::int64_t count = 0;
+    std::int64_t size = 0;
+    bool supported = true;
+};
+struct WjInspectData {
+    std::pmr::string name;
+    std::pmr::string author;
+    std::pmr::string version;
+    std::pmr::string description;
+    std::pmr::string game_type;
+    std::pmr::string game_id;
+    bool nsfw = false;
+    bool game_matches = true;   // 清单的游戏与本实例的游戏一致
+    std::pmr::string file;      // 本地 .wabbajack 路径
+    std::int64_t archive_count = 0;
+    std::int64_t archive_size = 0;
+    std::int64_t directive_count = 0;
+    std::int64_t supported_directives = 0;
+    std::pmr::vector<WjCount> sources;     // 按下载来源
+    std::pmr::vector<WjCount> directives;  // 按指令类型
+    std::pmr::string verdict;  // full | partial | none：我们能装多少
+};
+struct WjInstallData {
+    std::pmr::string status;  // complete|incomplete
+    std::pmr::string instance;
+    std::int64_t archives_total = 0;
+    std::int64_t archives_done = 0;
+    std::int64_t files_written = 0;
+    std::int64_t files_failed = 0;
+    std::pmr::vector<CollectionPendingRow> pending;  // key=压缩包/指令类型，kind 同上
+    std::pmr::vector<std::pmr::string> failures;
+};
+
 // ---- run --------------------------------------------------------------------
 struct RunData {
     std::pmr::string exe;

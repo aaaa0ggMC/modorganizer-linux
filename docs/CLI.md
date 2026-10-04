@@ -78,6 +78,15 @@
 - `collection search QUERY [--sort …] [--count N] [--offset N]`  搜集合。data：`{game,query,sort,total,collections:[{slug,name,summary,endorsements,downloads,revision,mod_count,total_size}]}`。拿到 slug 后用 `collection inspect/install`。
 - `mods list` 每行多了 `nexus_id`。
 
+### Wabbajack 整合包
+
+`.wabbajack` 是一个 zip：`modlist`（JSON，Archives + Directives）+ 内联数据/补丁。mo-linux 按清单把**实例目录**（即 MO2 便携实例：`mods/`、`profiles/`、`ModOrganizer.ini`……）重建出来；`-i DIR` 就是输出目录，装完它直接是可用的 mo-linux 实例（自动写 `mo-linux.json`）。
+
+- `wabbajack search QUERY [--count N] [--offset N] [--nsfw] [--all-games]`  搜官方画廊（各仓库列表并行获取，缓存在 `~/.cache/mo-linux/gallery`，6 小时）。默认只显示当前游戏、不含 NSFW，**按压缩包总大小升序**（先看到装得起的）。data：`{game,query,total,lists:[{title,machine_url,repository,author,version,description,download_size,archives_size,installed_size,archive_count,nsfw,unavailable}]}`。
+- `wabbajack inspect LIST`  LIST = 本地 `.wabbajack`、画廊的 `machine_url`/标题、或 authored-files 下载 URL（画廊来源会下载并按 xxh64 校验后缓存到 `<实例>/.mol-wabbajack-lists/`）。data：`{name,author,version,description,game_type,game_id,nsfw,game_matches,file,archive_count,archive_size,directive_count,supported_directives,sources:[{name,count,size,supported}],directives:[{name,count,supported}],verdict:"full"|"partial"|"none"}`。`verdict` 表示**指令层面**我们能执行多少；还要看 `sources`（`nexus` 需要 key，免费账号会变成 pending；`gamefile` 要求游戏文件与清单一致；`manual/mega/gdrive/…` 必须手动下载）。
+- `wabbajack install LIST [--game-dir DIR] [--downloads DIR]`  下载（Nexus 需要 key，Http/WabbajackCDN 直接下，游戏文件取自游戏目录）→ 校验 xxh64 → 解压 → 执行指令 → 校验每个输出文件。可续跑、幂等：处理完的压缩包记入 `<实例>/.mol-wabbajack/state.json`，已下载的按「大小+xxh64」复用。data：`{status,instance,archives_total,archives_done,files_written,files_failed,pending:[{key(数量),name,kind,detail,url}],failures:[…]}`；未完成退出码 4。`pending.kind`：`manual_download`｜`game_file_missing`｜`unsupported`（带数量的指令类型：`CreateBSA`、`TransformedTexture`、`MergedPatch` 等暂不支持，意味着清单有一部分内容缺失）。
+- 已支持的指令：`FromArchive`（含嵌套压缩包）、`PatchedFromArchive`（OctoDiff）、`InlineFile`、`RemappedInlineFile`（路径占位符 `GAME/MO2/DOWNLOAD_PATH_MAGIC_*` 换成 `Z:\…` 形式的本机路径）。
+
 ### Collections（Nexus 集合/整合包）与交互设计
 
 mo-linux 不能在中途向用户提问，所以统一用「**可续跑 + 返回 incomplete**」：每个需要人介入的 mod 记为 pending（不阻塞、不猜测），其余 mod 继续处理；命令最后返回退出码 4 与 pending 清单。用户（或 GUI）用 `collection resolve` 记下决定，再跑一次 `collection install` 即从中断处继续（状态存 `<实例>/collections/<slug>/state.json`，每个 mod 处理完立即落盘；已装好的不会重做，已下载的按「大小+md5」复用，无需联网）。

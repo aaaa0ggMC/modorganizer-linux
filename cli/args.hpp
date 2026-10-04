@@ -130,6 +130,16 @@ constexpr OptionSpec kOptLogs[] = {
     {"file", "", "--file", "Log file name inside the log directory (omit to list files)", true},
     {"tail", "", "--tail", "Number of trailing lines to show (default 80, max 2000)", true},
 };
+constexpr OptionSpec kOptWjSearch[] = {
+    {"count", "", "--count", "Number of results (default 20)", true},
+    {"offset", "", "--offset", "Skip this many results", true},
+    {"nsfw", "", "--nsfw", "Include NSFW lists", false},
+    {"all-games", "", "--all-games", "Do not filter by the instance's game", false},
+};
+constexpr OptionSpec kOptWjInstall[] = {
+    {"game-dir", "", "--game-dir", "Game directory (default: auto-detected / from the instance)", true},
+    {"downloads", "", "--downloads", "Downloads directory (default: <instance>/downloads)", true},
+};
 constexpr OptionSpec kOptConflicts[] = {
     {"mod", "", "--mod", "Only conflicts involving this mod", true},
 };

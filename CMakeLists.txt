@@ -26,7 +26,8 @@ target_include_directories(mocore PUBLIC core/include)
 target_compile_options(mocore PRIVATE -Wall -Wextra)
 find_package(CURL REQUIRED)
 find_package(EXPAT REQUIRED)
-target_link_libraries(mocore PUBLIC mol_alib6 CURL::libcurl EXPAT::EXPAT)
+find_package(ZLIB REQUIRED)
+target_link_libraries(mocore PUBLIC mol_alib6 CURL::libcurl EXPAT::EXPAT ZLIB::ZLIB)
 
 # ---- CLI --------------------------------------------------------------------
 file(GLOB CLI_SRC CONFIGURE_DEPENDS cli/*.cpp)
