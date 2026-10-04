@@ -124,7 +124,8 @@ struct InstallOptions {
     std::string profile;             // 空 → 实例当前 profile
     bool include_optional = true;
     bool fomod_defaults = false;     // 清单没给选择的 FOMOD 一律用默认
-    // 进度回调：stage ∈ "download" | "install"；done/total 对 "download" 是字节，对 "install" 是 mod 序号。返回 false 中止（未实现取消时可忽略）。
+    unsigned jobs = 0;               // 并行下载数（0 = MOL_JOBS 环境变量或默认 4）
+    // 进度回调：stage ∈ "download"（所有并行下载的合计字节，mod 名为空）| "downloaded"（第几个下载完）| "install"（第几个 mod）。返回 false 中止（未实现取消时可忽略）。
     std::function<void(std::string_view stage, std::string_view mod, std::uint64_t done, std::uint64_t total)> progress;
 };
 

@@ -211,6 +211,11 @@ Result run_collection_install(Context& ctx) {
         opt.profile = std::string(ctx.profile_override());
         opt.include_optional = !ctx.args.get_bool("--no-optional", false);
         opt.fomod_defaults = ctx.args.get_bool("--fomod-defaults", false);
+        if (ctx.args.has("--jobs")) {
+            std::int64_t j = 0;
+            if (!parse_int(ctx.args.get("--jobs", "", ctx.mem), j) || j < 1) return make_usage_error("collection install: --jobs needs an integer >= 1", ctx);
+            opt.jobs = static_cast<unsigned>(j);
+        }
         opt.progress = [&](std::string_view stage, std::string_view, std::uint64_t done, std::uint64_t total) {
             if (sink != nullptr && total > 0) sink->progress(std::string(stage), done, total);
         };

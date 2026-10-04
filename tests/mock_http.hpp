@@ -8,6 +8,7 @@
 #include <atomic>
 #include <functional>
 #include <map>
+#include <mutex>
 #include <string>
 #include <thread>
 #include <vector>
@@ -28,7 +29,8 @@ struct Resp {
 // 极简本地 HTTP 服务器：每个连接一个请求，Connection: close。
 class Mock {
 public:
-    explicit Mock(std::function<Resp(const Req&)> fn) : fn_(std::move(fn)) {
+    // threaded=true：每个连接一个线程（用来验证并行下载）；fn 与 seen 的访问由调用方保证线程安全（seen 已加锁）
+    explicit Mock(std::function<Resp(const Req&)> fn, bool threaded = false) : fn_(std::move(fn)), threaded_(threaded) {
         fd_ = ::socket(AF_INET, SOCK_STREAM, 0);
         int one = 1;
         ::setsockopt(fd_, SOL_SOCKET, SO_REUSEADDR, &one, sizeof one);
@@ -47,6 +49,7 @@ public:
         ::shutdown(fd_, SHUT_RDWR);
         ::close(fd_);
         if (th_.joinable()) th_.join();
+        for (auto& w : workers_) if (w.joinable()) w.join();
     }
     std::string base() const { return "http://127.0.0.1:" + std::to_string(port_); }
     std::vector<Req> seen;
@@ -56,6 +59,12 @@ private:
         while (!stop_) {
             const int c = ::accept(fd_, nullptr, nullptr);
             if (c < 0) break;
+            if (threaded_) { workers_.emplace_back([this, c] { handle(c); }); continue; }
+            handle(c);
+        }
+    }
+    void handle(int c) {
+        {
             std::string buf;
             char tmp[1024];
             while (buf.find("\r\n\r\n") == std::string::npos) {
@@ -93,7 +102,7 @@ private:
                 }
                 r.body = body.substr(0, want);
             }
-            seen.push_back(r);
+            { std::lock_guard<std::mutex> g(seen_mu_); seen.push_back(r); }
             const Resp resp = fn_(r);
             const std::string head = "HTTP/1.1 " + std::to_string(resp.status) + " X\r\nContent-Length: " + std::to_string(resp.body.size()) +
                                      "\r\nConnection: close\r\n" + resp.extra + "\r\n";
@@ -112,6 +121,9 @@ private:
     int port_ = 0;
     std::atomic<bool> stop_{false};
     std::thread th_;
+    bool threaded_ = false;
+    std::vector<std::thread> workers_;
+    std::mutex seen_mu_;
 };
 
 }  // namespace mockhttp

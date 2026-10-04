@@ -36,25 +36,6 @@ bool parse_id(std::string_view s, long long& out) {
     return true;
 }
 
-std::string url_basename(std::string_view url) {
-    std::string_view p = url;
-    if (auto q = p.find_first_of("?#"); q != std::string_view::npos) p = p.substr(0, q);
-    if (auto s = p.rfind('/'); s != std::string_view::npos) p = p.substr(s + 1);
-    std::string out;
-    for (std::size_t i = 0; i < p.size(); ++i) {
-        auto hv = [](char c) { return c >= '0' && c <= '9' ? c - '0' : c >= 'a' && c <= 'f' ? c - 'a' + 10 : c >= 'A' && c <= 'F' ? c - 'A' + 10 : -1; };
-        if (p[i] == '%' && i + 2 < p.size() && hv(p[i + 1]) >= 0 && hv(p[i + 2]) >= 0) {
-            out.push_back(static_cast<char>(hv(p[i + 1]) * 16 + hv(p[i + 2])));
-            i += 2;
-        } else {
-            out.push_back(p[i]);
-        }
-    }
-    for (char& c : out) if (c == '/' || c == '\\' || c == '\0') c = '_';
-    while (!out.empty() && out.front() == '.') out.erase(out.begin());
-    return out;
-}
-
 Result ok_result(Context& ctx) {
     Result r(ctx.mem);
     r.ok = true;

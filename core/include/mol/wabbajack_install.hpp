@@ -15,8 +15,9 @@ struct InstallOptions {
     std::string output_dir;     // 实例目录（Directive.To 相对它）
     std::string downloads_dir;  // 空 → <output>/downloads
     std::string game_dir;       // 真实游戏目录（GameFileSource 与路径占位符用）
+    unsigned jobs = 0;  // 并行下载数（0 = MOL_JOBS 环境变量或默认 4）
     const NexusClient* client = nullptr;  // 空 → Nexus 来源的压缩包只能用本地已有文件
-    // stage ∈ "download" | "extract" | "archive"；done/total：download 是字节，archive 是第几个/总数
+    // stage ∈ "download"（所有并行下载的合计字节）| "downloaded"（第几个下载完）| "extract" | "archive"（第几个/总数）
     std::function<void(std::string_view stage, std::string_view name, std::uint64_t done, std::uint64_t total)> progress;
 };
 

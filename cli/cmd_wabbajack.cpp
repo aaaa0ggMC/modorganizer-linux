@@ -61,7 +61,7 @@ Env env_for(Context& ctx) {
 std::string cache_dir(Context& ctx) { return (fs::path(std::string(ctx.instance_dir)) / ".mol-wabbajack-lists").string(); }
 
 // LIST：本地 .wabbajack 路径 | 画廊里的 machineURL / 标题 | authored-files 的下载 URL。返回本地文件路径。
-std::string resolve_list(Context& ctx, const Env& env, const std::string& ref) {
+std::string resolve_list(Context& ctx, const Env& /*env*/, const std::string& ref) {
     std::error_code ec;
     if (fs::is_regular_file(ref, ec)) return ref;
     std::string url;
@@ -138,7 +138,7 @@ Result run_wabbajack_inspect(Context& ctx) {
     WjInspectData d{.name = P(m.name, ctx.mem), .author = P(m.author, ctx.mem), .version = P(m.version, ctx.mem), .description = P(m.description, ctx.mem),
                     .game_type = P(m.game_type, ctx.mem), .game_id = P(wj::game_id_of(m.game_type), ctx.mem), .nsfw = m.nsfw,
                     .game_matches = wj::game_id_of(m.game_type) == env.game, .file = P(file, ctx.mem), .archive_count = static_cast<std::int64_t>(m.archives.size()),
-                    .directive_count = static_cast<std::int64_t>(m.directives.size()), .sources = std::pmr::vector<WjCount>(ctx.mem), .directives = std::pmr::vector<WjCount>(ctx.mem)};
+                    .directive_count = static_cast<std::int64_t>(m.directives.size()), .sources = std::pmr::vector<WjCount>(ctx.mem), .directives = std::pmr::vector<WjCount>(ctx.mem), .verdict = std::pmr::string(ctx.mem)};
     std::map<std::string, std::pair<std::int64_t, std::int64_t>> src;
     for (const auto& a : m.archives) { auto& e = src[a.src.kind]; ++e.first; e.second += a.size; d.archive_size += a.size; }
     for (const auto& [k, v] : src)
@@ -181,6 +181,11 @@ Result run_wabbajack_install(Context& ctx) {
         opt.output_dir = std::string(ctx.instance_dir);
         opt.game_dir = env.game_dir;
         if (ctx.args.has("--downloads")) opt.downloads_dir = std::string(ctx.args.get("--downloads", "", ctx.mem));
+        if (ctx.args.has("--jobs")) {
+            std::int64_t j = 0;
+            if (!parse_int(ctx.args.get("--jobs", "", ctx.mem), j) || j < 1) return make_usage_error("wabbajack install: --jobs needs an integer >= 1", ctx);
+            opt.jobs = static_cast<unsigned>(j);
+        }
         opt.client = client ? &*client : nullptr;
         opt.progress = [&](std::string_view stage, std::string_view, std::uint64_t d, std::uint64_t t) { if (sink != nullptr && t > 0) sink->progress(std::string(stage), d, t); };
         const wj::Report rep = wj::install_modlist(m, file, opt);

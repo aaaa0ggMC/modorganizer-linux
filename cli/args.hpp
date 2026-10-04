@@ -117,6 +117,7 @@ constexpr OptionSpec kOptCollectionInstall[] = {
     {"revision", "", "--revision", "Collection revision number (default: latest published)", true},
     {"no-optional", "", "--no-optional", "Skip the collection's optional mods", false},
     {"fomod-defaults", "", "--fomod-defaults", "Use FOMOD defaults where the collection gives no choices", false},
+    {"jobs", "", "--jobs", "Parallel downloads (1-16, default 4 or $MOL_JOBS)", true},
 };
 constexpr OptionSpec kOptCollectionResolve[] = {
     {"mod", "", "--mod", "Mod key from the pending list (collection mod tag or name)", true},
@@ -139,6 +140,7 @@ constexpr OptionSpec kOptWjSearch[] = {
 constexpr OptionSpec kOptWjInstall[] = {
     {"game-dir", "", "--game-dir", "Game directory (default: auto-detected / from the instance)", true},
     {"downloads", "", "--downloads", "Downloads directory (default: <instance>/downloads)", true},
+    {"jobs", "", "--jobs", "Parallel downloads (1-16, default 4 or $MOL_JOBS)", true},
 };
 constexpr OptionSpec kOptConflicts[] = {
     {"mod", "", "--mod", "Only conflicts involving this mod", true},

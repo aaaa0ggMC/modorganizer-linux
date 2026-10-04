@@ -97,11 +97,11 @@ bool init_instance(const InitOptions& opt);
 struct ModInfo {
     using allocator_type = mol::allocator_type;
     string name;
+    string version;             // meta.ini 的 [General] version（可空）
     bool enabled = false;
     bool separator = false;
     bool exists = false;     // mods/<name> 目录是否存在（分隔符恒为 false）
     std::int64_t nexus_id = 0;  // mods/<name>/meta.ini 的 [General] modid（MO2 兼容；0 = 未知）
-    string version;             // meta.ini 的 [General] version（可空）
     bool root = false;       // mods/<name>/meta.ini 的 [General] mol_root=true：目录结构镜像游戏根（映射到农场根而非 Data/）
     std::size_t priority = 0;  // 0 = 最低优先级（低→高序号）
     string path;               // 绝对路径（分隔符为空）

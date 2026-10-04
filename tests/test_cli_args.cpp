@@ -330,11 +330,11 @@ TEST(exit_code_mapping) {
     CHECK_EQ(exit_code_from_issues(mol::vector<Err>{}), 0);
     mol::vector<Err> one{mol::allocator_type(mem())};
     one.push_back(Err{mol::string("invalid_argument", mem()), mol::string("bad", mem()),
-                      mol::string("", mem())});
+                      mol::string("", mem()), mol::string("", mem())});
     CHECK_EQ(exit_code_from_issues(one), 2);
     one.clear();
     one.push_back(Err{mol::string("farm_not_owned", mem()), mol::string("boom", mem()),
-                      mol::string("", mem())});
+                      mol::string("", mem()), mol::string("", mem())});
     CHECK_EQ(exit_code_from_issues(one), 1);
 }
 

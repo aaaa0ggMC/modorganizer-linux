@@ -9,11 +9,13 @@
 #include <filesystem>
 #include <fstream>
 #include <map>
+#include <mutex>
 #include <set>
 
 #include "mol/casefold.hpp"
 #include "mol/http.hpp"
 #include "mol/mod_install.hpp"
+#include "mol/parallel.hpp"
 #include "mol/xxh64.hpp"
 
 import alib6;
@@ -222,24 +224,21 @@ Report install_modlist(const Modlist& list, const std::string& wj_file, const In
     std::map<std::string, const Archive*> archives;
     for (const auto& a : list.archives) archives[a.hash] = &a;
     rep.archives_total = static_cast<std::int64_t>(by_archive.size());
-    std::int64_t idx = 0;
-    for (const auto& [hash, dirs] : by_archive) {
-        ++idx;
-        auto ait = archives.find(hash);
-        if (ait == archives.end()) { rep.failures.push_back("directive references an unknown archive hash " + hash); rep.files_failed += static_cast<std::int64_t>(dirs.size()); continue; }
-        const Archive& a = *ait->second;
-        progress("archive", a.name, static_cast<std::uint64_t>(idx), static_cast<std::uint64_t>(by_archive.size()));
-        if (st.done.count(hash) > 0) { ++rep.archives_done; continue; }
-
-        // 2a 找/取压缩包
-        fs::path file;
+    // 取得一个压缩包（本地已有 / 下载 / 来自游戏目录），线程安全：只写自己的返回值与加锁的 st.verified。
+    struct Acq { fs::path file; std::vector<Pending> pend; std::vector<std::string> fail; };
+    std::mutex st_mu;
+    auto acquire = [&](const Archive& a, std::int64_t ndirs, const std::function<void(std::uint64_t, std::uint64_t)>& on_prog) -> Acq {
+        std::error_code ec;
+        Acq acq;
+        fs::path& file = acq.file;
         auto verified_ok = [&](const fs::path& p) {
             const auto key = p.string();
-            const auto sz = static_cast<std::int64_t>(fs::file_size(p, ec));
+            std::error_code ec2;
+            const auto sz = static_cast<std::int64_t>(fs::file_size(p, ec2));
             if (a.size > 0 && sz != a.size) return false;
-            if (auto it = st.verified.find(key); it != st.verified.end() && it->second == sz) return true;
+            { std::lock_guard<std::mutex> g(st_mu); if (auto it = st.verified.find(key); it != st.verified.end() && it->second == sz) return true; }
             if (wj_file_hash(key) != a.hash) return false;
-            st.verified[key] = sz;
+            { std::lock_guard<std::mutex> g(st_mu); st.verified[key] = sz; }
             return true;
         };
         {
@@ -257,7 +256,7 @@ Report install_modlist(const Modlist& list, const std::string& wj_file, const In
         if (file.empty()) {
             const Source& s = a.src;
             const fs::path dest = dl / safe_rel(a.name);
-            auto prog = [&](std::uint64_t d, std::uint64_t t) { progress("download", a.name, d, t); return true; };
+            auto prog = [&](std::uint64_t d, std::uint64_t t) { if (on_prog) on_prog(d, t); return true; };
             try {
                 if (s.kind == "http" && !s.url.empty()) {
                     std::vector<std::pair<std::string, std::string>> hdrs;
@@ -273,8 +272,8 @@ Report install_modlist(const Modlist& list, const std::string& wj_file, const In
                 } else if (s.kind == "gamefile") {
                     const fs::path gf = find_ci(fs::path(opt.game_dir), safe_rel(s.game_file));
                     if (gf.empty()) {
-                        rep.pending.push_back({"game_file_missing", a.name, "this file must come from the game installation: " + s.game_file, "", static_cast<std::int64_t>(dirs.size())});
-                        continue;
+                        acq.pend.push_back({"game_file_missing", a.name, "this file must come from the game installation: " + s.game_file, "", ndirs});
+                        return acq;
                     }
                     file = gf;
                 } else {
@@ -282,26 +281,69 @@ Report install_modlist(const Modlist& list, const std::string& wj_file, const In
                     if (s.kind == "nexus") detail = "no Nexus API key available (run `mo-linux nexus login`), or download it manually";
                     std::string url = s.url;
                     if (s.kind == "nexus") url = "https://www.nexusmods.com/" + s.game_domain + "/mods/" + std::to_string(s.mod_id) + "?tab=files&file_id=" + std::to_string(s.file_id);
-                    rep.pending.push_back({"manual_download", a.name + "  [" + s.kind + "]", detail, url, static_cast<std::int64_t>(dirs.size())});
-                    continue;
+                    acq.pend.push_back({"manual_download", a.name + "  [" + s.kind + "]", detail, url, ndirs});
+                    return acq;
                 }
             } catch (const Error& e) {
                 if (e.code == "nexus_not_found")
-                    rep.pending.push_back({"manual_download", a.name + "  [nexus]", "Nexus no longer serves this file (404; the author removed or replaced it). Find the same file elsewhere and put it into the downloads directory; it is matched by size + hash",
-                                           "https://www.nexusmods.com/" + s.game_domain + "/mods/" + std::to_string(s.mod_id) + "?tab=files&file_id=" + std::to_string(s.file_id), static_cast<std::int64_t>(dirs.size())});
+                    acq.pend.push_back({"manual_download", a.name + "  [nexus]", "Nexus no longer serves this file (404; the author removed or replaced it). Find the same file elsewhere and put it into the downloads directory; it is matched by size + hash",
+                                           "https://www.nexusmods.com/" + s.game_domain + "/mods/" + std::to_string(s.mod_id) + "?tab=files&file_id=" + std::to_string(s.file_id), ndirs});
                 else if (e.code == "nexus_premium")
-                    rep.pending.push_back({"manual_download", a.name + "  [nexus]", "a free Nexus account cannot download this directly; download it in the browser into the downloads directory",
-                                           "https://www.nexusmods.com/" + s.game_domain + "/mods/" + std::to_string(s.mod_id) + "?tab=files&file_id=" + std::to_string(s.file_id), static_cast<std::int64_t>(dirs.size())});
+                    acq.pend.push_back({"manual_download", a.name + "  [nexus]", "a free Nexus account cannot download this directly; download it in the browser into the downloads directory",
+                                           "https://www.nexusmods.com/" + s.game_domain + "/mods/" + std::to_string(s.mod_id) + "?tab=files&file_id=" + std::to_string(s.file_id), ndirs});
                 else
-                    rep.failures.push_back(a.name + ": " + e.code + ": " + e.what());
-                continue;
+                    acq.fail.push_back(a.name + ": " + e.code + ": " + e.what());
+                return acq;
             }
             if (!verified_ok(file)) {
                 if (s.kind != "gamefile") fs::remove(file, ec);
-                rep.failures.push_back(a.name + ": hash mismatch after download" + (s.kind == "gamefile" ? " (the game file differs from the one the list was built with)" : " (file deleted; run again)"));
-                continue;
+                acq.fail.push_back(a.name + ": hash mismatch after download" + (s.kind == "gamefile" ? " (the game file differs from the one the list was built with)" : " (file deleted; run again)"));
+                return acq;
             }
         }
+        return acq;
+    };
+    // ---- 预取阶段：并行取得所有尚未完成的压缩包（下载 + 校验）；之后的解压与指令执行仍按顺序串行 ----
+    std::map<std::string, Acq> acquired;
+    {
+        std::vector<const std::pair<const std::string, std::vector<const Directive*>>*> todo;
+        for (const auto& kv : by_archive)
+            if (st.done.count(kv.first) == 0 && archives.count(kv.first) > 0) todo.push_back(&kv);
+        std::uint64_t total = 0;
+        for (const auto* kv : todo) total += static_cast<std::uint64_t>(std::max<std::int64_t>(archives.at(kv->first)->size, 0));
+        std::vector<std::atomic<std::uint64_t>> cur(todo.size());
+        std::mutex mu;
+        std::size_t finished = 0;
+        parallel_for(todo.size(), download_jobs(opt.jobs), [&](std::size_t i) {
+            const Archive& a = *archives.at(todo[i]->first);
+            Acq r = acquire(a, static_cast<std::int64_t>(todo[i]->second.size()), [&](std::uint64_t d, std::uint64_t) {
+                cur[i].store(d);
+                if (!opt.progress) return;
+                std::uint64_t sum = 0;
+                for (auto& x : cur) sum += x.load();
+                std::lock_guard<std::mutex> g(mu);
+                progress("download", "", sum, total);
+            });
+            std::lock_guard<std::mutex> g(mu);
+            acquired[todo[i]->first] = std::move(r);
+            progress("downloaded", a.name, ++finished, todo.size());
+        });
+    }
+    std::int64_t idx = 0;
+    for (const auto& [hash, dirs] : by_archive) {
+        ++idx;
+        auto ait = archives.find(hash);
+        if (ait == archives.end()) { rep.failures.push_back("directive references an unknown archive hash " + hash); rep.files_failed += static_cast<std::int64_t>(dirs.size()); continue; }
+        const Archive& a = *ait->second;
+        progress("archive", a.name, static_cast<std::uint64_t>(idx), static_cast<std::uint64_t>(by_archive.size()));
+        if (st.done.count(hash) > 0) { ++rep.archives_done; continue; }
+
+        // 2a 取得压缩包（已在预取阶段并行完成）
+        const Acq& acq = acquired.at(hash);
+        for (const auto& p : acq.pend) rep.pending.push_back(p);
+        for (const auto& f : acq.fail) { rep.failures.push_back(f); }
+        if (acq.file.empty()) continue;
+        const fs::path file = acq.file;
 
         // 2b 解压并执行指令
         const fs::path tmp = work / "tmp" / safe_name(hash);

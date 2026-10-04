@@ -1,5 +1,6 @@
 #include <unistd.h>
 
+#include <chrono>
 #include <cstdlib>
 #include <filesystem>
 #include <fstream>
@@ -256,4 +257,73 @@ TEST(md5_mismatch_deletes_the_bad_download_and_fails) {
     CHECK(st.mods["t1"].note.find("md5 mismatch") != std::string::npos);
     CHECK(!fs::exists(t.dir / "inst/downloads/m.zip"));  // 坏文件已删除，下次重新下载
     CHECK(!fs::exists(t.dir / "inst/mods/M"));
+}
+
+TEST(downloads_run_in_parallel_and_installs_stay_ordered) {
+    if (!have_zip()) return;
+    Tmp t;
+    constexpr int N = 6;
+    std::string mods_json;
+    for (int i = 0; i < N; ++i) {
+        put(t.dir / ("src/m" + std::to_string(i) + "/meshes/f.nif"), ("M" + std::to_string(i)).c_str());
+        zip_dir(t.dir / ("src/m" + std::to_string(i)), t.dir / ("m" + std::to_string(i) + ".zip"));
+        if (i) mods_json += ",";
+        mods_json += R"({"name":"Mod)" + std::to_string(i) + R"(","version":"1","optional":false,"source":{"type":"nexus","modId":)" + std::to_string(100 + i) + R"(,"fileId":)" +
+                     std::to_string(200 + i) + R"(,"tag":"t)" + std::to_string(i) + R"("}})";
+    }
+    const Collection coll = parse_collection(std::string(R"({"info":{"name":"P","domainName":"skyrimspecialedition"},"mods":[)") + mods_json + R"(],"modRules":[]})");
+
+    std::atomic<int> active{0}, peak{0};
+    std::string cdn_port;
+    Mock api([&](const Req& r) -> Resp {
+        for (int i = 0; i < N; ++i) {
+            const std::string id = std::to_string(100 + i), fid = std::to_string(200 + i), name = "m" + std::to_string(i) + ".zip";
+            if (r.target == "/games/skyrimspecialedition/mods/" + id + "/files.json")
+                return {200, "{\"files\":[{\"file_id\":" + fid + ",\"name\":\"" + name + "\",\"file_name\":\"" + name + "\",\"version\":\"1\",\"category_name\":\"main\",\"size_kb\":1,\"is_primary\":true}]}", ""};
+            if (r.target.rfind("/games/skyrimspecialedition/mods/" + id + "/files/" + fid + "/download_link.json", 0) == 0)
+                return {200, "[{\"name\":\"c\",\"short_name\":\"c\",\"URI\":\"http://" + cdn_port + "/dl/" + name + "\"}]", ""};
+        }
+        return {404, "{}", ""};
+    }, true);
+    Mock cdn([&](const Req& r) -> Resp {
+        const int now = ++active;
+        int p = peak.load();
+        while (now > p && !peak.compare_exchange_weak(p, now)) {}
+        ::usleep(300000);  // 每个下载 300ms
+        --active;
+        return {200, slurp(t.dir / r.target.substr(r.target.rfind('/') + 1)), ""};
+    }, true);
+    cdn_port = cdn.base().substr(7);
+
+    Instance inst;
+    inst.root.assign((t.dir / "inst").string());
+    inst.mods_dir.assign((t.dir / "inst/mods").string());
+    inst.profiles_dir.assign((t.dir / "inst/profiles").string());
+    inst.downloads_dir.assign((t.dir / "inst/downloads").string());
+    inst.overwrite_dir.assign((t.dir / "inst/overwrite").string());
+    inst.cfg.game.assign("skyrimse");
+    inst.cfg.profile.assign("Default");
+    fs::create_directories(t.dir / "inst/profiles/Default");
+    put(t.dir / "game/Data/Skyrim.esm");
+    inst.cfg.game_dir.assign((t.dir / "game").string());
+    NexusClient client("K", "1", api.base());
+    State st;
+    st.slug = "par";
+    InstallOptions opt;
+    opt.profile = "Default";
+    opt.jobs = 4;
+    std::uint64_t last_total = 0;
+    opt.progress = [&](std::string_view stage, std::string_view, std::uint64_t d, std::uint64_t) { if (stage == "download") last_total = d; };
+    const auto t0 = std::chrono::steady_clock::now();
+    const Report r = install_collection(inst, &client, coll, st, opt, {});
+    const auto ms = std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::steady_clock::now() - t0).count();
+    CHECK(r.complete());
+    CHECK_EQ(r.installed, std::size_t{static_cast<std::size_t>(N)});
+    CHECK(peak.load() >= 3);   // 确实并发了
+    CHECK(ms < 1500);          // 串行至少 6×300ms = 1.8s
+    (void)last_total;
+    // 安装顺序仍是清单顺序：modlist 里后面的优先级更高
+    const auto mods = list_mods(inst, "Default");
+    CHECK_EQ(mods.size(), std::size_t{static_cast<std::size_t>(N)});
+    for (int i = 0; i < N; ++i) CHECK_EQ(std::string(mods[static_cast<std::size_t>(i)].name), "Mod" + std::to_string(i));
 }
