@@ -29,7 +29,7 @@ struct LaunchOptions {
     std::span<const std::string_view> args;      // 传给游戏 exe 的参数
 };
 
-// exe_rel：相对农场根的可执行文件（如 "skse64_loader.exe"）。不检查文件是否存在（由调用方负责）。
+// exe_rel：相对农场根的可执行文件（如 "skse64_loader.exe"）；以 '/' 开头则当作绝对路径原样使用。不检查文件是否存在（由调用方负责）。
 // cfg.runner_kind == "proton"：<proton_path>/proton run <farm>/<exe>，设置
 //   STEAM_COMPAT_DATA_PATH（prefix 以 "/pfx" 结尾则取其父目录，否则取 prefix 本身）、
 //   STEAM_COMPAT_CLIENT_INSTALL_PATH（cfg.steam_root）、STEAM_COMPAT_APP_ID / SteamAppId / SteamGameId、

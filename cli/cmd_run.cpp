@@ -2,6 +2,7 @@
 // 会写 profile、前缀 AppData 与农场，并真正启动游戏（--dry-run 只输出将要执行的命令，不碰进程）。
 // 混用约束：所有 #include 在 import 之前（详见 cli/cmd_common.hpp 文件头）。
 #include "mol/casefold.hpp"
+#include "mol/executables.hpp"
 #include "mol/game_host.hpp"
 #include "mol/instance.hpp"
 #include "mol/overwrite.hpp"
@@ -22,9 +23,21 @@ Result run_run(Context& ctx) {
     const bool detach = ctx.args.get_bool("--detach", false);
     const bool skse = ctx.args.get_bool("--skse", false);
     mol::string exe = ctx.args.get("--exe", "", ctx.mem);
-    if (exe.empty()) exe = skse ? "skse64_loader.exe" : "SkyrimSE.exe";
+    const mol::string title = ctx.args.get("--title", "", ctx.mem);
+    if (!title.empty() && !exe.empty()) return make_usage_error("run: --title and --exe are mutually exclusive", ctx);
+    if (!title.empty() && skse) return make_usage_error("run: --title and --skse are mutually exclusive", ctx);
+    if (exe.empty() && title.empty()) exe = skse ? "skse64_loader.exe" : "SkyrimSE.exe";
 
     const mol::Instance inst = mol::load_instance(ctx.instance_dir, ctx.profile_override(), ctx.mem);
+    mol::vector<mol::string> tool_args(ctx.mem);
+    if (!title.empty()) {  // 实例里登记的工具：农场里的相对路径，或（农场之外的）绝对路径
+        const mol::Executable* hit = nullptr;
+        const auto execs = mol::list_executables(inst, ctx.mem);
+        for (const auto& e : execs) if (mol::casefold(e.title) == mol::casefold(title)) { hit = &e; break; }
+        if (!hit) throw mol::Error("mod_not_found", "no executable titled '" + std::string(title) + "' is registered in this instance (see `executables list`)");
+        exe = hit->farm_path.empty() ? hit->binary : hit->farm_path;
+        tool_args = mol::split_arguments(hit->arguments, ctx.mem);
+    }
     const auto host = mol::GameHost::open();
     const auto game = host.create(inst.cfg.game, inst.cfg.game_dir, inst.cfg.prefix, inst.cfg.prefix_user);
 
@@ -50,15 +63,20 @@ Result run_run(Context& ctx) {
 
     // 先看农场里（或将要出现的农场里）有没有这个可执行文件：大小写不敏感。
     bool exe_found = false;
+    if (!exe.empty() && exe.front() == '/') exe_found = path_exists(std::string(exe));  // 农场之外的工具
     for (const auto& op : plan.ops) {
         if (op.kind == mol::OpKind::Link && mol::casefold(op.path) == mol::casefold(exe)) exe_found = true;
     }
-    if (!exe_found && !dry) exe_found = path_exists(std::string(inst.farm_path) + "/" + std::string(exe));
-    if (!exe_found && dry) exe_found = true;  // dry-run 不应用农场；不在此处拒绝
+    if (!exe_found && !dry && exe.front() != '/') exe_found = path_exists(std::string(inst.farm_path) + "/" + std::string(exe));
+    if (!exe_found && dry && exe.front() != '/') exe_found = true;  // dry-run 不应用农场；不在此处拒绝
     if (!exe_found)
         throw mol::Error("mod_not_found", "executable not found in the farm: " + std::string(exe), std::string(exe));
 
-    mol::LaunchSpec spec = mol::build_launch(inst, exe, {}, ctx.mem);
+    std::vector<std::string_view> arg_views;
+    for (const auto& a : tool_args) arg_views.push_back(a);
+    mol::LaunchOptions lo;
+    lo.args = arg_views;
+    mol::LaunchSpec spec = mol::build_launch(inst, exe, lo, ctx.mem);
     int game_exit = 0;
     std::size_t captured_after = 0;
     if (!dry) {
@@ -68,6 +86,7 @@ Result run_run(Context& ctx) {
     }
 
     RunData d{.exe = mol::string(exe, ctx.mem),
+              .title = mol::string(title, ctx.mem),
               .dry_run = dry,
               .detached = detach,
               .synced_plugins = synced,
@@ -76,6 +95,20 @@ Result run_run(Context& ctx) {
               .argv = std::pmr::vector<std::pmr::string>(ctx.mem),
               .cwd = mol::string(spec.cwd, ctx.mem)};
     for (const auto& a : spec.argv) d.argv.push_back(std::pmr::string(a, ctx.mem));
+    Result r(ctx.mem);
+    r.ok = true;
+    r.exit_code = 0;
+    r.command = ctx.command;
+    r.set_data(std::move(d));
+    return r;
+}
+
+Result run_executables_list(Context& ctx) {
+    const mol::Instance inst = mol::load_instance(ctx.instance_dir, ctx.profile_override(), ctx.mem);
+    ExecutablesData d{.executables = std::pmr::vector<ExecutableRow>(ctx.mem)};
+    for (const auto& e : mol::list_executables(inst, ctx.mem))
+        d.executables.push_back(ExecutableRow{.title = std::pmr::string(e.title, ctx.mem), .binary = std::pmr::string(e.binary, ctx.mem), .arguments = std::pmr::string(e.arguments, ctx.mem),
+                                              .working_dir = std::pmr::string(e.working_dir, ctx.mem), .farm_path = std::pmr::string(e.farm_path, ctx.mem), .hide = e.hide});
     Result r(ctx.mem);
     r.ok = true;
     r.exit_code = 0;

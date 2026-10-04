@@ -16,6 +16,7 @@ Result run_plugins_disable(Context&);
 Result run_plugins_move(Context&);
 Result run_plugins_sort(Context&);
 Result run_run(Context&);
+Result run_executables_list(Context&);
 Result run_instance_default(Context&);
 Result run_nxm_register(Context&);
 Result run_nxm_handle(Context&);

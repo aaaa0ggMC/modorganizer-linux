@@ -42,6 +42,7 @@
 | Collections | `collection inspect/install/status/resolve` | **已用真实集合 xk05aw（Essential Mods for Skyrim，r325，60 个 mod、454MB、目标游戏 1.7.104.0）端到端跑通**：全部 60 个下载+md5 校验+安装（18 个 FOMOD 按清单选择，无需人工），16 个插件顺序/启用已应用，`doctor` 全绿、masters 满足；`run --skse` 后 SKSE 日志 **38 个插件 loaded correctly、0 disabled**（Address Library 生效，EngineFixes/PapyrusExtender/JContainers 等均加载） |
 
 | Nexus 搜索 | `nexus search/info/install`、`collection search` | **真实 Nexus 实测**：搜索（词干匹配）、需求（`modRequirements`）、`nexus install --mod 22825 --requirements` 自动先装 SKSE→SkyUI→Wider MCM 并按此顺序排优先级；mod 目录名取站内名；`meta.ini` 记 `modid/fileid`（MO2 兼容），据此判断「已安装」 |
+| 登记的可执行文件 | `executables list`、`run --title` | 读 `[customExecutables]`，把 Windows 路径/`%BASE_DIR%` 换成 Unix 路径并换算成农场相对路径（游戏目录、普通/根目录型 mod）；农场之外的工具用绝对路径运行。**农场之外的工具看不到虚拟的 Data 目录**（没有 usvfs），这类工具（如 Synthesis/Pandora）若依赖虚拟文件系统可能行为不对 |
 | 默认实例 + nxm 处理器 | `instance default`、`nxm register/handle` | 免费账号的流程：浏览器点下载 → `nxm handle` 下到默认实例并把压缩包记给等它的集合 mod。check_cli.py 用本地假 Nexus 端到端验证（含集合状态被更新、`.desktop` 文件写出）。**没有在真实浏览器里验证过 `xdg-mime` 关联**（HOME 在 /tmp 的测试里 xdg-mime 可能失败，只给 warning） |
 | profile 本地 ini/存档 | `plugins sync`/`run` 自动 | 按 MO2 的 `settings.ini`（LocalSettings/LocalSaves）链接 Skyrim.ini/SkyrimPrefs.ini/SkyrimCustom.ini 与 saves/；单测覆盖写穿、备份、幂等、绝不覆盖有内容的真实存档目录。**没有在真实 Wabbajack 整合包上跑过**（缺口：R10 的 Qt 大小写问题在这条路径上不存在，因为是 core 自己做的链接） |
 | 插件排序（LOOT 近似） | `plugins sort --loot` | 下载 loot/skyrimse 的 masterlist（3124 条规则，1.1MB YAML，yaml-cpp 解析 0.4s 内）；硬边=masters+after/req，其次按分组名次，其次保持当前顺序；在真实 76 个插件上分组命中率 100%、幂等。**近似**：无 condition 求值/userlist/overlap 启发式 |
@@ -257,6 +258,7 @@ Claude 阶段的提交带 `Co-Authored-By` 与 `Claude-Session`；接续提交�
 | R19 | CreateBSA 的清单 Hash 与我们重建的 BSA 不一致（作者打包器的 padding/压缩编码差异）只提示不失败；若某个游戏版本对 padding 字节敏感则会暴露——目前所有真实 BSA 的 padding 都是垃圾值，游戏照常加载 | 低 |
 | R20 | TransformedTexture 的编码质量/mip 滤波与 DirectXTex 不同：BC7 只用 mode 6（单子集）、没有感知误差优化；法线图（BC5/BC7 法线）不做重归一化，色彩空间（sRGB）不做线性空间缩放。视觉上应无明显差异，但极端高频贴图可能略逊 | 低 |
 | R21 | LOOT 近似排序：masterlist 分支固定为 v0.26（404 时回退 master），将来分支名变化要跟；带 condition 的规则被忽略可能漏掉「仅当装了 X 才需要」的顺序约束 | 低 |
+| R22 | 整合包里依赖 usvfs 虚拟文件系统的外部工具（Synthesis、Pandora、BodySlide 的输出写入 overwrite 等）在农场里只能看到合并后的符号链接树；它们写出的新文件会落到农场里的真实文件，`overwrite capture` 会在下次启动前收走，但**工具运行当下**不会实时落进 overwrite | 中 |
 | R18 | Wabbajack 安装对每个压缩包是「完整解压到临时目录再复制」，大压缩包会短时占双倍磁盘；Nexus 来源按文件名/大小+xxh64 匹配本地缓存，免费账号全部变 pending；清单里的 Nexus `GameName` 直接小写当域名 | 低 |
 | R17 | `skse install` 依赖 Nexus 主文件标记与 SKSE 的 dll 命名规则（`skse64_<a>_<b>_<c>.dll`）；官方改规则时要跟 | 低 |
 | R12 | **alib6 的 4 处修改未提交**，且第 3 点是行为变更；若作者在别处使用了"同时声明破折号别名与 name，并依赖裸 name 匹配"的写法会受影响 | 中 |

@@ -28,7 +28,8 @@ LaunchSpec build_launch(const Instance& inst, std::string_view exe_rel, const La
     LaunchSpec spec(mem);
     const auto& c = inst.cfg;
     spec.cwd.assign(inst.farm_path);
-    const string exe = join_dir(inst.farm_path, exe_rel, mem);
+    // 绝对路径（农场之外的工具）原样使用；否则相对农场根
+    const string exe = (!exe_rel.empty() && exe_rel.front() == '/') ? string(exe_rel, mem) : join_dir(inst.farm_path, exe_rel, mem);
 
     if (c.runner_kind == "proton") {
         if (c.proton_path.empty())

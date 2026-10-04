@@ -508,9 +508,22 @@ struct DefaultInstanceData {
     bool changed = false;
 };
 
+struct ExecutableRow {
+    std::pmr::string title;
+    std::pmr::string binary;
+    std::pmr::string arguments;
+    std::pmr::string working_dir;
+    std::pmr::string farm_path;  // 非空 = 在农场里相对这个路径运行；空 = 直接用 binary 的绝对路径
+    bool hide = false;
+};
+struct ExecutablesData {
+    std::pmr::vector<ExecutableRow> executables;
+};
+
 // ---- run --------------------------------------------------------------------
 struct RunData {
     std::pmr::string exe;
+    std::pmr::string title;  // 用 --title 启动时的登记名
     bool dry_run = false;
     bool detached = false;
     bool synced_plugins = false;

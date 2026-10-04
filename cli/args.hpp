@@ -62,6 +62,7 @@ constexpr OptionSpec kOptModsMove[] = {
 constexpr OptionSpec kOptRun[] = {
     {"exe", "", "--exe", "Executable relative to the farm (default SkyrimSE.exe)", true},
     {"skse", "", "--skse", "Run skse64_loader.exe", false},
+    {"title", "", "--title", "Run the executable registered in the instance (see `executables list`), with its arguments", true},
     {"detach", "", "--detach", "Return right after launching (do not wait; skips overwrite capture)", false},
     {"dry-run", "", "--dry-run", "Print the launch command only; change nothing", false},
 };

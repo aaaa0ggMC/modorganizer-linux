@@ -197,7 +197,16 @@ Result run_wabbajack_install(Context& ctx) {
             const std::string root(ctx.instance_dir), gd = env.game_dir, pf(det.prefix), pr(det.proton_path), sr(det.steam_root);
             io.root = root;
             io.game = env.game;
-            io.game_dir = gd;
+            // 清单若带「Stock Game」（实例里自带一份游戏拷贝，ModOrganizer.ini 的 gamePath 指向它）就用它，而不是 Steam 目录
+            std::string stock;
+            if (auto gp = mol::Ini::load((fs::path(root) / "ModOrganizer.ini").string(), ctx.mem).get("General", "gamePath", ctx.mem)) {
+                const std::string unix_gp(mol::wine_to_unix(*gp, pf, ctx.mem));
+                std::error_code e3;
+                const auto canon = fs::weakly_canonical(unix_gp, e3);
+                const auto rootc = fs::weakly_canonical(root, e3);
+                if (!unix_gp.empty() && fs::is_directory(unix_gp, e3) && canon.string().rfind(rootc.string() + "/", 0) == 0) stock = unix_gp;
+            }
+            io.game_dir = stock.empty() ? std::string_view(gd) : std::string_view(stock);
             io.prefix = pf;
             io.proton_path = pr;
             io.steam_root = sr;
