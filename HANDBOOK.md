@@ -41,6 +41,12 @@
 
 | Collections | `collection inspect/install/status/resolve` | **已用真实集合 xk05aw（Essential Mods for Skyrim，r325，60 个 mod、454MB、目标游戏 1.7.104.0）端到端跑通**：全部 60 个下载+md5 校验+安装（18 个 FOMOD 按清单选择，无需人工），16 个插件顺序/启用已应用，`doctor` 全绿、masters 满足；`run --skse` 后 SKSE 日志 **38 个插件 loaded correctly、0 disabled**（Address Library 生效，EngineFixes/PapyrusExtender/JContainers 等均加载） |
 
+| Nexus 搜索 | `nexus search/info/install`、`collection search` | **真实 Nexus 实测**：搜索（词干匹配）、需求（`modRequirements`）、`nexus install --mod 22825 --requirements` 自动先装 SKSE→SkyUI→Wider MCM 并按此顺序排优先级；mod 目录名取站内名；`meta.ini` 记 `modid/fileid`（MO2 兼容），据此判断「已安装」 |
+| Agent 框架 | `schema`、`next`、`logs`、错误 `hint`、doctor `fix`，`docs/AGENT.md` | `schema` 列出全部命令的 effects/needs/confirm/idempotent 与错误码；`next` 把 doctor + 集合状态 + 缺 key 汇成有序步骤（带 needs_human/confirm/blocking）；游戏在跑时 `next` 不建议再启动。check_cli.py 断言每个命令都有元数据 |
+| Wabbajack | `wabbajack search/inspect/install` | **真实实测**：画廊 229 个列表（并行 + 6h 缓存，首次 5s、之后 12ms）；`.wabbajack` 经 authored-files 分片下载并按 xxh64 校验通过；Halgari's Helper（MO2 2.4.4，1512 个文件）端到端装好，输出文件逐个 hash 校验、占位符已替换、二次运行幂等。「A Dragonborn's Fate」（124 个压缩包、16461 条指令）与「Skyrim Modding Essentials」（301 个、21541 条）指令层面都是 `full` 可装 |
+
+**Wabbajack 的现实边界**：只实现了 FromArchive（含嵌套）/PatchedFromArchive(OctoDiff)/InlineFile/RemappedInlineFile。很多大型列表会用到 `CreateBSA`（重新打包 BSA）与 `TransformedTexture`（贴图重编码），这些**没实现**，会作为 `unsupported` 报告，列表因此是 partial。`inspect` 的 `verdict` 能在下载前告诉你。`gamefile` 来源（直接取游戏目录里的文件）要求游戏版本与清单一致，否则 hash 不符。
+
 **Collections 的交互设计**：不能中途提问 ⇒ 可续跑 + incomplete（退出码 4）。遇到需要人的 mod（`manual_download` 免费账号、`fomod_choices` 清单没给选择、`unsupported` 带 patches/bundle）只记 pending 并继续其它 mod；`collection resolve` 记下决定，再 `collection install` 续跑。详见 docs/CLI.md「Collections」。mock 集成测试覆盖：第一轮 1 装 2 挂起 → resolve → 离线第二轮全完成且不重复下载 → 第三轮幂等；md5 不符删文件并 failed。
 
 **用这个集合发现并修复的真实 bug**：①Nexus CDN 地址含空格（`I'm Talkin Here-….7z`），libcurl 报 "bad/illegal format"，13 个 mod 失败 → URL 统一百分号编码；②安装时把「唯一的顶层目录」一律当外壳剥掉，导致 `SKSE/Plugins/…`（如 Address Library）被剥成根文件、SKSE 插件全部 "address library needs to be updated" → 改为：顶层本身已是游戏数据目录（名单取自上游 SkyrimSEModDataChecker）就保留；两处都有回归测试。
@@ -54,7 +60,7 @@
 - Nexus 的 CDN 下载 URL 末段现在是 UUID，文件名必须取 `files.json` 的 `file_name`。
 - 官方 API 政策（help.nexusmods.com/article/114）：个人 key 仅容许测试/个人使用；公开发布前须联系 support 注册应用拿 SSO slug；禁止冒充其它应用（含借用 MO2 的标识）、禁止用别的应用的 key。**不要用 MO2 的 SSO 标识。**
 
-**当前明确未做项**：Nexus SSO（需先注册应用）、Wabbajack、Collections 的 bundle/patches 来源与 requires/conflicts 规则的强制执行、mod 之间的依赖图（Nexus Requirements）、LOOT 式排序、FOMOD 图片提取与 GUI 向导（CLI 侧接口已就绪）、mod 更新检查、固定 `third_party` 提交、LICENSE。真实的写穿符号链接限制见 R13。
+**当前明确未做项**：Nexus SSO（需先注册应用）、Wabbajack 的 CreateBSA/TransformedTexture/MergedPatch（见上）、Collections 的 bundle/patches 来源与 requires/conflicts 规则的强制执行、mod 之间的依赖图（Nexus Requirements）、LOOT 式排序、FOMOD 图片提取与 GUI 向导（CLI 侧接口已就绪）、mod 更新检查、固定 `third_party` 提交、LICENSE。真实的写穿符号链接限制见 R13。
 
 ## 1. 目标与边界
 
@@ -241,6 +247,7 @@ Claude 阶段的提交带 `Co-Authored-By` 与 `Claude-Session`；接续提交�
 | R14 | `overwrite promote --yes` 是破坏性的、不可撤销的（文件移进真实游戏 Data，不再受我们管理）；目标已存在时跳过不覆盖 | 低 |
 | R15 | FOMOD 只在合成包上测过；与 MO2 的差异：忽略 alwaysInstall/installIfUsable（与 MO2 一致）、`moduleDependencies` 不检查；图片不提取 | 中 |
 | R16 | Nexus 个人 key 仅限个人/测试；公开发布需向 Nexus 注册应用拿 SSO slug（官方流程见 §0.1）。API 限流（日/时额度）已映射为 `nexus_rate_limited` 但未做退避重试 | 中 |
+| R18 | Wabbajack 安装对每个压缩包是「完整解压到临时目录再复制」，大压缩包会短时占双倍磁盘；Nexus 来源按文件名/大小+xxh64 匹配本地缓存，免费账号全部变 pending；清单里的 Nexus `GameName` 直接小写当域名 | 低 |
 | R17 | `skse install` 依赖 Nexus 主文件标记与 SKSE 的 dll 命名规则（`skse64_<a>_<b>_<c>.dll`）；官方改规则时要跟 | 低 |
 | R12 | **alib6 的 4 处修改未提交**，且第 3 点是行为变更；若作者在别处使用了"同时声明破折号别名与 name，并依赖裸 name 匹配"的写法会受影响 | 中 |
 
