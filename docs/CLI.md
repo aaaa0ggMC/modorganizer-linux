@@ -24,7 +24,7 @@
 `progress` 至多每 50ms 或每 1% 发一次；对端关闭管道（EPIPE）时静默停止发送，命令照常完成。`fifo:`：不存在则 mkfifo，以非阻塞写打开，无读端则放弃（不阻塞命令）。`unix:`：connect 失败则放弃。`fd:`：直接 write。
 
 ## 命令
-- `instance init --game-dir G --prefix P [--prefix-user U] [--runner proton|wine] [--proton-path X] [--steam-root S] [--profile N]`
+- `instance init [--game-dir G] [--prefix P] [--prefix-user U] [--runner proton|wine] [--proton-path X] [--steam-root S] [--profile N]`
   data: `{"root":"…","changed":bool,"config":{…mo-linux.json 内容…}}`
 - `instance show`  data: `{"root","mods_dir","profiles_dir","downloads_dir","overwrite_dir","farm_path","config":{game,game_dir,prefix,prefix_user,profile,farm_dir,runner_kind,proton_path,steam_root}}`
 - `mods list`  data: `{"profile":"…","mods":[{"name","enabled","separator","exists","priority","path"}]}`（低→高优先级）
@@ -40,6 +40,8 @@
 - `plugins sync`  写 profile 与前缀 AppData（不启动游戏）。profile 无 plugins.txt 时先调用上游 `initializeProfile`；随后把上游 `mappings()` 物化为符号链接（目标处已有真实文件 → 改名 `.mol-backup`，已有备份则拒绝）。data：`{"profile","initialized_profile","changed","entries":[{"source","destination","action"}]}`，action ∈ `ok|link|relink|backup+link|skip-missing-source`。幂等。
 
 - `run [--exe REL] [--skse] [--detach] [--dry-run]`  **会启动游戏**。流程：capture 上次残留的 overwrite → `plugins sync` → apply 农场 → `onAboutToRun` → `proton run`（默认阻塞到游戏退出；`--detach` 立即返回）→ 退出后把农场里的新真实文件移回 `overwrite/`（`Data/` 之外的进 `<实例>/overwrite-root/`）。`--dry-run` 只给出命令、不改任何东西。data：`{exe,dry_run,synced_plugins,game_exit_code,captured,argv,cwd}`。
+
+未给出 `--game-dir/--prefix/--proton-path/--steam-root` 时从本机 Steam 自动探测（libraryfolders.vdf、compatdata/489830/pfx、最新的 Proton）；探测不到才报错。实例目录可用环境变量 `MOL_INSTANCE` 设为默认。
 
 后续：`doctor`。
 

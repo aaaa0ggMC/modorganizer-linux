@@ -1,6 +1,7 @@
 // mo-linux instance init / instance show 子命令。
 // 混用约束：所有 #include 在 import 之前（详见 cli/cmd_common.hpp 文件头）。
 #include "mol/instance.hpp"
+#include "mol/steam_detect.hpp"
 
 #include "commands.hpp"
 
@@ -33,14 +34,20 @@ ConfigData to_config(const mol::InstanceConfig& c, mol::mr* mem) {
 Result run_instance_init(Context& ctx) {
     if (!ctx.args.ok()) return make_usage_error(ctx.args.error, ctx);
 
-    const mol::string game_dir = ctx.args.get("--game-dir", "", ctx.mem);
-    const mol::string prefix = ctx.args.get("--prefix", "", ctx.mem);
+    // 未给出的 --game-dir/--prefix/--proton-path/--steam-root 从本机 Steam 安装自动探测。
+    const mol::SteamDetect det = mol::detect_steam({}, ctx.mem);
+    mol::string game_dir = ctx.args.get("--game-dir", "", ctx.mem);
+    if (game_dir.empty()) game_dir = det.game_dir;
+    mol::string prefix = ctx.args.get("--prefix", "", ctx.mem);
+    if (prefix.empty()) prefix = det.prefix;
     const mol::string prefix_user = ctx.args.get("--prefix-user", "steamuser", ctx.mem);
     const mol::string runner = ctx.args.get("--runner", "proton", ctx.mem);
-    const mol::string proton_path = ctx.args.get("--proton-path", "", ctx.mem);
-    const mol::string steam_root = ctx.args.get("--steam-root", "", ctx.mem);
-    if (game_dir.empty()) return make_usage_error("instance init: --game-dir is required", ctx);
-    if (prefix.empty()) return make_usage_error("instance init: --prefix is required", ctx);
+    mol::string proton_path = ctx.args.get("--proton-path", "", ctx.mem);
+    if (proton_path.empty() && runner == "proton") proton_path = det.proton_path;
+    mol::string steam_root = ctx.args.get("--steam-root", "", ctx.mem);
+    if (steam_root.empty()) steam_root = det.steam_root;
+    if (game_dir.empty()) return make_usage_error("instance init: --game-dir is required (Steam install not auto-detected)", ctx);
+    if (prefix.empty()) return make_usage_error("instance init: --prefix is required (no Proton prefix auto-detected; run the game once from Steam)", ctx);
     if (runner != "proton" && runner != "wine") {
         return make_usage_error("instance init: --runner must be 'proton' or 'wine'", ctx);
     }
