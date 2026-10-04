@@ -1,6 +1,10 @@
 // plugins sync：把游戏层 mappings() 物化为符号链接（见 mol/plugins_sync.hpp）。会写 profile 与前缀 AppData，不启动游戏。
+#include <fstream>
+#include <iterator>
+
 #include "mol/game_host.hpp"
 #include "mol/instance.hpp"
+#include "mol/loot.hpp"
 #include "mol/plugins.hpp"
 #include "mol/plugins_sync.hpp"
 
@@ -38,7 +42,7 @@ std::vector<mol::string> forced_list(Context& ctx, const mol::Instance& inst) {
 }
 
 PluginsListData to_data(Context& ctx, const mol::PluginList& list, bool changed, std::string_view profile) {
-    PluginsListData d{.profile = std::pmr::string(profile, ctx.mem), .changed = changed, .plugins = std::pmr::vector<PluginRowData>(ctx.mem),
+    PluginsListData d{.profile = std::pmr::string(profile, ctx.mem), .changed = changed, .sorted_with = std::pmr::string(ctx.mem), .plugins = std::pmr::vector<PluginRowData>(ctx.mem),
                       .issues = std::pmr::vector<MasterIssueRow>(ctx.mem)};
     std::size_t i = 0;
     for (const auto& r : list.rows) {
@@ -52,12 +56,17 @@ PluginsListData to_data(Context& ctx, const mol::PluginList& list, bool changed,
     return d;
 }
 
-Result finish(Context& ctx, const mol::Instance& inst, const mol::PluginList& list, bool changed) {
+Result finish(Context& ctx, const mol::Instance& inst, const mol::PluginList& list, bool changed, std::string_view sorted_with = {},
+              std::int64_t rules = 0, std::int64_t grouped = 0) {
     Result r(ctx.mem);
     r.ok = true;
     r.exit_code = 0;
     r.command = ctx.command;
-    r.set_data(to_data(ctx, list, changed, inst.cfg.profile));
+    auto d = to_data(ctx, list, changed, inst.cfg.profile);
+    d.sorted_with = std::pmr::string(sorted_with, ctx.mem);
+    d.rules_applied = rules;
+    d.grouped = grouped;
+    r.set_data(std::move(d));
     return r;
 }
 
@@ -103,11 +112,31 @@ Result run_plugins_move(Context& ctx) {
 }
 
 Result run_plugins_sort(Context& ctx) {
+    if (!ctx.args.ok()) return make_usage_error(ctx.args.error, ctx);
     const auto inst = mol::load_instance(ctx.instance_dir, ctx.profile_override(), ctx.mem);
     auto list = mol::load_plugins(inst, forced_list(ctx, inst), ctx.profile_override(), ctx.mem);
-    const bool changed = mol::plugin_sort_by_masters(list);
+    const mol::string mlfile = ctx.args.get("--masterlist", "", ctx.mem);
+    const bool use_loot = ctx.args.get_bool("--loot", false) || !mlfile.empty();
+    bool changed = false;
+    mol::loot::SortReport rep;
+    if (use_loot) {
+        std::string yaml;
+        if (!mlfile.empty()) {
+            std::ifstream in{std::string(mlfile), std::ios::binary};
+            if (!in) throw mol::Error("io_error", "cannot read the masterlist file", std::string(mlfile));
+            yaml.assign(std::istreambuf_iterator<char>(in), std::istreambuf_iterator<char>());
+        } else {
+            yaml = mol::loot::fetch_masterlist({}, {}, ctx.args.get_bool("--refresh", false));
+        }
+        const auto ml = mol::loot::parse_masterlist(yaml);
+        rep = mol::loot::sort_with_masterlist(list, ml);
+        changed = rep.changed;
+    }
+    changed = mol::plugin_sort_by_masters(list) || changed;  // 最后兜底保证 masters 在前
     mol::save_plugins(inst, list, ctx.profile_override());
-    return finish(ctx, inst, list, changed);
+    Result r = finish(ctx, inst, list, changed, use_loot ? "loot" : "masters", static_cast<std::int64_t>(rep.rules_applied), static_cast<std::int64_t>(rep.grouped));
+    for (const auto& c : rep.cycles) r.add_warning("loot_note", c, "");
+    return r;
 }
 
 }  // namespace cli

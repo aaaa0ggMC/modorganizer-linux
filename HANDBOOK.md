@@ -42,6 +42,7 @@
 | Collections | `collection inspect/install/status/resolve` | **已用真实集合 xk05aw（Essential Mods for Skyrim，r325，60 个 mod、454MB、目标游戏 1.7.104.0）端到端跑通**：全部 60 个下载+md5 校验+安装（18 个 FOMOD 按清单选择，无需人工），16 个插件顺序/启用已应用，`doctor` 全绿、masters 满足；`run --skse` 后 SKSE 日志 **38 个插件 loaded correctly、0 disabled**（Address Library 生效，EngineFixes/PapyrusExtender/JContainers 等均加载） |
 
 | Nexus 搜索 | `nexus search/info/install`、`collection search` | **真实 Nexus 实测**：搜索（词干匹配）、需求（`modRequirements`）、`nexus install --mod 22825 --requirements` 自动先装 SKSE→SkyUI→Wider MCM 并按此顺序排优先级；mod 目录名取站内名；`meta.ini` 记 `modid/fileid`（MO2 兼容），据此判断「已安装」 |
+| 插件排序（LOOT 近似） | `plugins sort --loot` | 下载 loot/skyrimse 的 masterlist（3124 条规则，1.1MB YAML，yaml-cpp 解析 0.4s 内）；硬边=masters+after/req，其次按分组名次，其次保持当前顺序；在真实 76 个插件上分组命中率 100%、幂等。**近似**：无 condition 求值/userlist/overlap 启发式 |
 | Agent 框架 | `schema`、`next`、`logs`、错误 `hint`、doctor `fix`，`docs/AGENT.md` | `schema` 列出全部命令的 effects/needs/confirm/idempotent 与错误码；`next` 把 doctor + 集合状态 + 缺 key 汇成有序步骤（带 needs_human/confirm/blocking）；游戏在跑时 `next` 不建议再启动。check_cli.py 断言每个命令都有元数据 |
 | Wabbajack | `wabbajack search/inspect/install` | **真实实测**：画廊 229 个列表（并行 + 6h 缓存，首次 5s、之后 12ms）；`.wabbajack` 经 authored-files 分片下载并按 xxh64 校验通过；Halgari's Helper（MO2 2.4.4，1512 个文件）端到端装好，输出文件逐个 hash 校验、占位符已替换、二次运行幂等。「A Dragonborn's Fate」（124 个压缩包、16461 条指令）与「Skyrim Modding Essentials」（301 个、21541 条）指令层面都是 `full` 可装 |
 
@@ -253,6 +254,7 @@ Claude 阶段的提交带 `Co-Authored-By` 与 `Claude-Session`；接续提交�
 | R16 | Nexus 个人 key 仅限个人/测试；公开发布需向 Nexus 注册应用拿 SSO slug（官方流程见 §0.1）。API 限流（日/时额度）已映射为 `nexus_rate_limited` 但未做退避重试 | 中 |
 | R19 | CreateBSA 的清单 Hash 与我们重建的 BSA 不一致（作者打包器的 padding/压缩编码差异）只提示不失败；若某个游戏版本对 padding 字节敏感则会暴露——目前所有真实 BSA 的 padding 都是垃圾值，游戏照常加载 | 低 |
 | R20 | TransformedTexture 的编码质量/mip 滤波与 DirectXTex 不同：BC7 只用 mode 6（单子集）、没有感知误差优化；法线图（BC5/BC7 法线）不做重归一化，色彩空间（sRGB）不做线性空间缩放。视觉上应无明显差异，但极端高频贴图可能略逊 | 低 |
+| R21 | LOOT 近似排序：masterlist 分支固定为 v0.26（404 时回退 master），将来分支名变化要跟；带 condition 的规则被忽略可能漏掉「仅当装了 X 才需要」的顺序约束 | 低 |
 | R18 | Wabbajack 安装对每个压缩包是「完整解压到临时目录再复制」，大压缩包会短时占双倍磁盘；Nexus 来源按文件名/大小+xxh64 匹配本地缓存，免费账号全部变 pending；清单里的 Nexus `GameName` 直接小写当域名 | 低 |
 | R17 | `skse install` 依赖 Nexus 主文件标记与 SKSE 的 dll 命名规则（`skse64_<a>_<b>_<c>.dll`）；官方改规则时要跟 | 低 |
 | R12 | **alib6 的 4 处修改未提交**，且第 3 点是行为变更；若作者在别处使用了"同时声明破折号别名与 name，并依赖裸 name 匹配"的写法会受影响 | 中 |

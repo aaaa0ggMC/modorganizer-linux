@@ -142,6 +142,11 @@ constexpr OptionSpec kOptWjInstall[] = {
     {"downloads", "", "--downloads", "Downloads directory (default: <instance>/downloads)", true},
     {"jobs", "", "--jobs", "Parallel downloads (1-16, default 4 or $MOL_JOBS)", true},
 };
+constexpr OptionSpec kOptPluginsSort[] = {
+    {"loot", "", "--loot", "Also apply the LOOT masterlist (after/req rules and groups); downloaded and cached", false},
+    {"masterlist", "", "--masterlist", "Use this masterlist.yaml file instead of downloading (implies --loot)", true},
+    {"refresh", "", "--refresh", "Re-download the cached LOOT masterlist", false},
+};
 constexpr OptionSpec kOptConflicts[] = {
     {"mod", "", "--mod", "Only conflicts involving this mod", true},
 };

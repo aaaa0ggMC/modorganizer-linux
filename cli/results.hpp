@@ -252,6 +252,9 @@ struct MasterIssueRow {
 struct PluginsListData {
     std::pmr::string profile;
     bool changed = false;  // 本次命令是否改动了 plugins.txt/loadorder.txt（list 恒为 false）
+    std::pmr::string sorted_with;  // sort 时：masters | loot
+    std::int64_t rules_applied = 0; // loot：命中的 after/req 边数
+    std::int64_t grouped = 0;       // loot：有分组的插件数
     std::pmr::vector<PluginRowData> plugins;
     std::pmr::vector<MasterIssueRow> issues;
 };
