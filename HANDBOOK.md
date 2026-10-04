@@ -123,6 +123,9 @@ mo-linux (CLI, GCC, C++26, alib6)            ← cli/
 - **include 顺序陷阱的真实后果**：uibase 自己的 TU 若用 `-I include/uibase`，`pch.h` 里 `<string.h>` 在 `extern "C"` 块内 `#include <strings.h>` 会截获 uibase 的 `strings.h`，导致 `MOBase::ireplace_all/iequals` 被编成 **C 链接**，使用方 `dlopen` 时 `undefined symbol`。已改为对 uibase 自身与消费者统一 `-idirafter`，并用 `-iquote` 保证其自身 `"strings.h"` 解析正确（`host/CMakeLists.txt`）。
 - **本机 Skyrim 状态**：`SkyrimSE.exe` 为 1.7.104.0（文件日期 9 月 9 日），目录里的 SKSE 是 `skse64_1_6_1170.dll`（loader 0.2.2.6）→ **版本不匹配，SKSE 多半无法加载**。属于 `doctor` 应报告的典型问题；先用无 SKSE 的 `SkyrimSE.exe` 验证启动。
 
+- **真实数据上的农场**（本机 Skyrim SE，176 个文件/8 个目录）：合并约 2–10ms、应用约 2ms、二次 plan 为 0（幂等）。同层 `data/` 与 `DATA/` 并存时合并器正确给出 `intra-layer casefold conflict` 警告。
+- **Proton 实测**（Proton 9.0 (Beta)，一次性前缀）：`cmd /c dir` 能列出农场，Wine 通过链接读到真实大小；复制 `Skyrim.esm`（249752131 字节）经由链接与原文件 `cmp` 一致。
+
 ## 8. 构建与运行
 
 依赖（Arch）：`cmake>=4.4 ninja gcc>=16 clang qt6-base qt6-declarative spdlog zlib lz4 nlohmann-json glm rapidjson tomlplusplus`；`~/Projs/aaaa0ggmcLib`（或 `-DMOL_ALIB6_DIR=`）；`third_party/uibase`、`third_party/game_bethesda` 需检出（目前是本地 clone，**尚未建 submodule/固定 commit**）。
@@ -162,8 +165,8 @@ ctest --test-dir build --output-on-failure
 | 项 | 说明 | 严重度 |
 |---|---|---|
 | R1 | ~~host 运行时未验证~~ **已验证（部分）**：`libmo-game` 已能 `dlopen`，`GameSkyrimSE::init/setGamePath` 与全部信息查询在本机真实 Skyrim SE 目录上返回正确结果（目录、DLC、可执行文件、SKSE、ini 名、`gameVersion`=1.7.104.0，已用 `strings -e l SkyrimSE.exe` 独立核对）。**仍未验证**：`initializeProfile`、`GamePlugins::writePluginLists`、存档读取等会走更多 shim 路径的功能 | 中 |
-| R2 | **Proton 启动未实测**：`proton run` 在 Steam 之外的环境变量集合、pressure-vessel 能否解析指向农场外的符号链接（我用 `STEAM_COMPAT_MOUNTS`/`PRESSURE_VESSEL_FILESYSTEMS_RW` 兜底）均未实测 | 高 |
-| R3 | **符号链接在 Wine/容器内的行为**：农场里 exe 与 DLL 是链接；SKSE、`GetModuleFileName`、游戏对自身目录的探测是否正常，未验证 | 高 |
+| R2 | ~~Proton 启动未实测~~ **已验证（容器与环境变量部分）**：用一次性前缀（`/tmp`）跑 `proton run cmd /c dir`，`STEAM_COMPAT_MOUNTS` / `PRESSURE_VESSEL_FILESYSTEMS_RW` 的取值足以让容器看到农场与其链接目标。**未验证**：真正启动 `SkyrimSE.exe`（需要交互与用户确认） | 中 |
+| R3 | ~~符号链接在 Wine/容器内的行为~~ **文件级已验证**：Wine 经农场内符号链接看到目标文件真实大小，复制出的 249MB `Skyrim.esm` 与原文件逐字节一致。**未验证**：SKSE 注入、游戏对自身目录的探测、游戏写入（新文件落在农场而非 Steam 目录；已有链接文件被就地修改会写穿到 Steam 目录——需要 overwrite 捕获机制，尚未实现） | 中 |
 | R4 | `third_party` 未固定 commit / 未建 submodule；uibase 补丁与版本绑定 | 中 |
 | R5 | `CMAKE_EXPERIMENTAL_CXX_IMPORT_STD` 的 UUID 随 CMake 版本变，升级会直接失败（有清晰报错） | 中 |
 | R6 | GPL-3.0：复用 MO2 代码意味着本项目须以 GPL-3.0 发布，**尚未添加 LICENSE** | 中 |
