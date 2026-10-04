@@ -147,6 +147,9 @@ constexpr OptionSpec kOptPluginsSort[] = {
     {"masterlist", "", "--masterlist", "Use this masterlist.yaml file instead of downloading (implies --loot)", true},
     {"refresh", "", "--refresh", "Re-download the cached LOOT masterlist", false},
 };
+constexpr OptionSpec kOptInstanceDefault[] = {
+    {"set", "", "--set", "Make the -i/$MOL_INSTANCE/current-directory instance the default", false},
+};
 constexpr OptionSpec kOptConflicts[] = {
     {"mod", "", "--mod", "Only conflicts involving this mod", true},
 };

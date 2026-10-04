@@ -70,6 +70,12 @@
 - `logs [--file NAME] [--tail N]`  只读。列出前缀里 `My Games/Skyrim Special Edition/SKSE/` 的日志文件（新→旧），或读取其中一个的最后 N 行（默认 80、最多 2000）。data：`{dir,files:[{name,size,modified}],name,tail}`。`NAME` 只能是目录内的纯文件名。
 - 所有错误条目（`errors[]`）与警告多了 `hint` 字段：对该错误码的默认下一步建议。`doctor` 的每项检查多了 `fix`（argv 数组，空 = 需要人处理）。
 
+### 默认实例与 nxm:// 链接处理器（免费账号的下载流程）
+
+- `instance default [--set]`  显示/设置**默认实例**（记在 `~/.config/mo-linux/default-instance`）。没有 `-i`、没有 `MOL_INSTANCE`、且当前目录不是实例时回退到它。`--set` 把 `-i`/当前目录那个实例设为默认（不是实例 → `instance_not_found`）。data：`{path,changed}`。
+- `nxm register`  把 mo-linux 注册为浏览器的 `nxm://` 处理器：写 `~/.local/share/applications/mo-linux-nxm.desktop`（`Exec=… nxm handle %u`）并尽力 `xdg-mime default`。**会改 MIME 默认关联，执行前向用户确认**。data：`{desktop_file,exec,mime_registered}`。
+- `nxm handle URL`  浏览器点「Mod Manager Download」后由系统调用：用链接里的 `key/expires` 下载文件到默认实例的 `downloads/`，并把压缩包记给**正在等它的集合 mod**（扫 `collections/*/state.json` 里按 modId/fileId 对上的）；下次 `collection install` 会复用并照常做 md5 校验。Wabbajack 的手动下载项也只需文件落进 `downloads/`（按大小+hash 匹配）。完成后尽力发桌面通知。data：`{instance,path,size,game,mod_id,file_id,matches:[{collection,key,name}]}`。
+
 ### Nexus 搜索与按 id 安装
 
 - `nexus search QUERY [--sort relevance|endorsements|downloads|updatedAt] [--count N≤50] [--offset N]`  搜当前游戏的 mod（QUERY 用站内词干匹配；传空串列出榜单）。data：`{game,query,sort,total,mods:[{mod_id,name,author,summary,version,updated_at,endorsements,downloads,installed}]}`；`installed` = 本实例里已有来自该 mod 的安装（靠 meta.ini 的 `modid`）。

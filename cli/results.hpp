@@ -483,6 +483,31 @@ struct OutdatedData {
     std::pmr::vector<OutdatedRow> mods;
 };
 
+// ---- nxm / default instance ---------------------------------------------------
+struct NxmMatchRow {
+    std::pmr::string collection;
+    std::pmr::string key;
+    std::pmr::string name;
+};
+struct NxmHandleData {
+    std::pmr::string instance;
+    std::pmr::string path;
+    std::uint64_t size = 0;
+    std::pmr::string game;
+    std::int64_t mod_id = 0;
+    std::int64_t file_id = 0;
+    std::pmr::vector<NxmMatchRow> matches;  // 正在等这个文件的集合 mod（已记下压缩包，下次 `collection install` 会继续）
+};
+struct NxmRegisterData {
+    std::pmr::string desktop_file;
+    std::pmr::string exec;
+    bool mime_registered = false;  // xdg-mime 是否成功
+};
+struct DefaultInstanceData {
+    std::pmr::string path;  // 空 = 未设置
+    bool changed = false;
+};
+
 // ---- run --------------------------------------------------------------------
 struct RunData {
     std::pmr::string exe;

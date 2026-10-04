@@ -145,4 +145,60 @@ data, _ = call('-j', '-i', str(instance), 'next')
 assert 'ready' in data['data'] and isinstance(data['data']['steps'], list)
 checks += 1
 
+# ---- 默认实例 / nxm 处理器 ----
+import threading, http.server, socketserver
+env_home = dict(os.environ)
+env_home['XDG_CONFIG_HOME'] = str(root / 'xdg')
+instance = root / 'instance-nxm'
+call('-j', '-i', str(instance), 'instance', 'init', '--game-dir', str(game), '--prefix', str(prefix))
+data, _ = call('-j', '-i', str(instance), 'instance', 'default', env=env_home)
+assert data['data']['path'] == '' and data['data']['changed'] is False
+data, _ = call('-j', '-i', str(instance), 'instance', 'default', '--set', env=env_home)
+assert data['data']['path'] == str(instance) and data['data']['changed'] is True
+# 在一个不是实例的目录里运行也能找到默认实例
+r = subprocess.run([exe, '-j', 'instance', 'show'], text=True, capture_output=True, env=env_home, cwd=str(root))
+assert r.returncode == 0 and json.loads(r.stdout)['data']['root'] == str(instance), r.stdout
+checks += 1
+# 不是实例的目录不能设为默认
+data, _ = call('-j', '-i', str(root / 'nowhere'), 'instance', 'default', '--set', env=env_home, code=1)
+assert data['errors'][0]['code'] == 'instance_not_found'
+checks += 1
+
+# nxm handle：本地假 Nexus（只实现 files.json / download_link / 文件本身）
+payload = b'ARCHIVE-BYTES' * 10
+class H(http.server.BaseHTTPRequestHandler):
+    def log_message(self, *a): pass
+    def _send(self, code, body, ct='application/json'):
+        self.send_response(code); self.send_header('Content-Length', str(len(body))); self.send_header('Content-Type', ct); self.end_headers(); self.wfile.write(body)
+    def do_GET(self):
+        if self.path.startswith('/dl/'): return self._send(200, payload, 'application/octet-stream')
+        if self.path.endswith('/files.json'):
+            return self._send(200, json.dumps({'files': [{'file_id': 6, 'name': 'M', 'file_name': 'm-5-6.zip', 'version': '1', 'category_name': 'main', 'size_kb': 1, 'is_primary': True}]}).encode())
+        if 'download_link.json' in self.path:
+            assert 'key=K' in self.path and 'expires=1' in self.path, self.path
+            return self._send(200, json.dumps([{'name': 'c', 'short_name': 'c', 'URI': f'http://127.0.0.1:{srv.server_address[1]}/dl/m-5-6.zip'}]).encode())
+        self._send(404, b'{}')
+srv = socketserver.TCPServer(('127.0.0.1', 0), H)
+threading.Thread(target=srv.serve_forever, daemon=True).start()
+env_nx = dict(env_home, NEXUS_API_KEY='x', MOL_NEXUS_API=f'http://127.0.0.1:{srv.server_address[1]}')
+# 先造一个在等这个文件的集合状态
+cdir = instance / 'collections' / 'demo'
+(cdir / 'archive-1').mkdir(parents=True)
+(cdir / 'archive-1' / 'collection.json').write_text(json.dumps({'info': {'name': 'Demo', 'domainName': 'skyrimspecialedition'},
+    'mods': [{'name': 'Waiting', 'version': '1', 'optional': False, 'source': {'type': 'nexus', 'modId': 5, 'fileId': 6, 'tag': 'tg'}}], 'modRules': []}))
+(cdir / 'state.json').write_text(json.dumps({'version': 1, 'slug': 'demo', 'name': 'Demo', 'revision': 1, 'mods': {'tg': {'name': 'Waiting', 'status': 'pending', 'archive': '', 'mod_dir': '', 'note': ''}}, 'overrides': {}}))
+data, _ = call('-j', 'nxm', 'handle', 'nxm://skyrimspecialedition/mods/5/files/6?key=K&expires=1&user_id=9', env=env_nx)
+assert Path(data['data']['path']).read_bytes() == payload
+assert [m['key'] for m in data['data']['matches']] == ['tg'], data['data']
+st = json.loads((cdir / 'state.json').read_text())
+assert st['mods']['tg']['archive'] == data['data']['path']
+checks += 1
+srv.shutdown()
+
+# nxm register：写 .desktop（HOME 在 /tmp 下，不会碰真实配置）
+data, _ = call('-j', 'nxm', 'register', env=env_home)
+desk = Path(data['data']['desktop_file'])
+assert desk.is_file() and 'x-scheme-handler/nxm' in desk.read_text() and 'nxm handle %u' in desk.read_text()
+checks += 1
+
 print(f'CLI integration: {checks} checks passed')

@@ -64,7 +64,7 @@ Same incomplete protocol: `manual_download` rows (Mega, MediaFire, Google Drive,
 - **Starting the game** (`run`): always confirm. It launches a real process and writes the user's Wine prefix.
 - **`overwrite promote --yes`**: moves files into the real game directory, irreversibly. Preview first (no `--yes`), show the user the list.
 - **Nexus API key**: only the user can create it (nexusmods.com → Account → API). Never invent, print, log or store it anywhere except through `mo-linux nexus login` (key on stdin). If a key was pasted into a chat, tell the user to rotate it afterwards.
-- **Free Nexus accounts**: downloads need an `nxm://` link from the website.
+- **Free Nexus accounts**: downloads need an `nxm://` link from the website. Easiest for the user: you run `mo-linux instance default --set` once and (with their OK) `mo-linux nxm register`; afterwards every "Mod Manager Download" click in the browser downloads straight into the instance and unblocks the waiting collection mod — you only re-run `collection install`.
 - **Game or Proton problems** that `doctor` marks as errors without a `fix` (missing game, no prefix): the user must install/run the game from Steam once.
 
 ## Safety rules

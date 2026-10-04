@@ -70,6 +70,11 @@ struct Instance {
           overwrite_dir(std::move(o.overwrite_dir), a), farm_path(std::move(o.farm_path), a), cfg(std::move(o.cfg), a) {}
 };
 
+// 「默认实例」：记在 ~/.config/mo-linux/default-instance（一行路径），供没有 -i/MOL_INSTANCE/当前目录实例时回退
+// （例如从浏览器启动的 nxm:// 处理器）。不存在返回空串。
+string default_instance_path(mr* mem = default_mr());
+void set_default_instance(std::string_view path);  // 写文件；路径会被绝对化
+
 // 读取实例。root 须存在且含 ModOrganizer.ini 或 mo-linux.json（至少其一），否则抛 Error{instance_not_found}。
 // 推导规则（优先级从高到低）：mo-linux.json 字段 > ModOrganizer.ini（[General] gameName/gamePath/selected_profile，
 // 路径经 wine_to_unix(prefix)；mod_directory/profiles_directory/download_directory/overwrite_directory 里的

@@ -1,6 +1,7 @@
 // mo-linux CLI 的纯逻辑部分：路径工具 + ParsedArgs 访问器。
 // 选项解析已全部交给 alib6 Command（见 cli/parse.cpp 的 CommandInput 适配器）。
 #include "args.hpp"
+#include "mol/instance.hpp"
 
 #include <cstdlib>
 #include <filesystem>
@@ -40,6 +41,12 @@ mol::string resolve_instance_dir(const GlobalOptions& g, mol::mr* mem) {
     std::error_code ec;
     const auto cwd = std::filesystem::current_path(ec);
     if (ec) return mol::string(".", mem);
+    // 当前目录不像实例、但设置过默认实例 → 用默认实例（比如从浏览器启动的 nxm 处理器没有可用的 cwd）
+    const bool cwd_is_instance = path_exists(cwd.string() + "/mo-linux.json") || path_exists(cwd.string() + "/ModOrganizer.ini");
+    if (!cwd_is_instance) {
+        const mol::string def = mol::default_instance_path(mem);
+        if (!def.empty() && path_exists(def)) return def;
+    }
     return mol::string(normalize_unix(cwd.generic_string()), mem);
 }
 

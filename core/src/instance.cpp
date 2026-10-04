@@ -155,6 +155,30 @@ fs::path profile_dir_checked(const Instance& inst, std::string_view profile) {
 }  // namespace
 
 // ---------------------------------------------------------------------------
+namespace {
+fs::path default_instance_file() {
+    if (const char* x = std::getenv("XDG_CONFIG_HOME"); x && *x) return fs::path(x) / "mo-linux/default-instance";
+    const char* h = std::getenv("HOME");
+    return fs::path(h ? h : "/") / ".config/mo-linux/default-instance";
+}
+}  // namespace
+
+string default_instance_path(mr* mem) {
+    std::ifstream in(default_instance_file());
+    std::string line;
+    std::getline(in, line);
+    while (!line.empty() && (line.back() == '\r' || line.back() == ' ')) line.pop_back();
+    return string(line, mem);
+}
+
+void set_default_instance(std::string_view path) {
+    std::error_code ec;
+    const fs::path abs = fs::absolute(P(path), ec).lexically_normal();
+    const fs::path f = default_instance_file();
+    fs::create_directories(f.parent_path(), ec);
+    atomic_write(f, abs.string() + "\n");
+}
+
 Instance load_instance(std::string_view root_sv, std::string_view profile_override, mr* mem) {
     std::error_code ec;
     fs::path root = fs::absolute(P(root_sv), ec).lexically_normal();
