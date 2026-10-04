@@ -38,6 +38,7 @@ Instance make(const Tmp& t) {
     i.mods_dir.assign((t.dir / "inst/mods").string());
     i.profiles_dir.assign((t.dir / "inst/profiles").string());
     i.overwrite_dir.assign((t.dir / "inst/overwrite").string());
+    i.downloads_dir.assign((t.dir / "inst/downloads").string());
     i.cfg.profile.assign("Default");
     fs::create_directories(t.dir / "inst/profiles/Default");
     fs::create_directories(t.dir / "inst/mods");
@@ -145,4 +146,71 @@ TEST(mark_mod_root_preserves_existing_meta_ini) {
     const std::string s2((std::istreambuf_iterator<char>(in2)), {});
     CHECK(s2.find("mol_root=false") != std::string::npos);
     CHECK_EQ(s2.find("mol_root=true"), std::string::npos);
+}
+
+TEST(install_fomod_modes) {
+    if (!have_zip_tool()) return;
+    Tmp t;
+    Instance inst = make(t);
+    const fs::path game = t.dir / "game";
+    put(game / "Data/Skyrim.esm");
+    inst.cfg.game_dir.assign(game.string());
+    fs::create_directories(t.dir / "f/fomod");
+    {
+        std::ofstream(t.dir / "f/fomod/ModuleConfig.xml") << R"(<config><moduleName>M</moduleName>
+<requiredInstallFiles><file source="req.txt" destination="req.txt"/></requiredInstallFiles>
+<installSteps><installStep name="S"><optionalFileGroups><group name="G" type="SelectExactlyOne"><plugins order="Explicit">
+<plugin name="A"><files><file source="a.txt" destination="chosen.txt"/></files><typeDescriptor><type name="Optional"/></typeDescriptor></plugin>
+<plugin name="B"><files><file source="b.txt" destination="chosen.txt"/></files><typeDescriptor><type name="Recommended"/></typeDescriptor></plugin>
+</plugins></group></optionalFileGroups></installStep></installSteps></config>)";
+    }
+    put(t.dir / "f/req.txt", "req");
+    put(t.dir / "f/a.txt", "A");
+    put(t.dir / "f/b.txt", "B");
+    put(t.dir / "f/unselected_extra.txt", "never");
+    CHECK(zip_dir(t.dir / "f", t.dir / "fomod.zip"));
+    auto slurp = [](const fs::path& p) { std::ifstream in(p); return std::string((std::istreambuf_iterator<char>(in)), {}); };
+
+    // Unset → 必须明确选择
+    CHECK_EQ(code_of([&] { InstallOptions o; o.name = "X"; install_archive(inst, (t.dir / "fomod.zip").string(), o); }),
+             std::string("fomod_choices_required"));
+    CHECK(!fs::exists(t.dir / "inst/mods/X"));
+    CHECK_EQ(list_mods(inst).size(), std::size_t{0});
+
+    // 只读检查能读到配置
+    const auto cfg = read_archive_fomod(inst, (t.dir / "fomod.zip").string());
+    CHECK(cfg.has_value());
+    CHECK_EQ(cfg->module_name, std::string("M"));
+    if (fs::exists(t.dir / "inst/downloads")) for (const auto& e : fs::directory_iterator(t.dir / "inst/downloads")) { (void)e; CHECK(false); }  // 临时目录已清理
+
+    // Defaults → B（Recommended）；未被 FOMOD 选中的文件不会出现
+    InstallOptions d;
+    d.name = "Def";
+    d.fomod = FomodMode::Defaults;
+    const auto r1 = install_archive(inst, (t.dir / "fomod.zip").string(), d);
+    CHECK(r1.fomod);
+    CHECK_EQ(slurp(t.dir / "inst/mods/Def/chosen.txt"), std::string("B"));
+    CHECK(fs::exists(t.dir / "inst/mods/Def/req.txt"));
+    CHECK(!fs::exists(t.dir / "inst/mods/Def/unselected_extra.txt"));
+    CHECK(!fs::exists(t.dir / "inst/mods/Def/fomod"));
+
+    // Choices → A
+    InstallOptions c;
+    c.name = "Cho";
+    c.fomod = FomodMode::Choices;
+    c.choices["S"]["G"] = {"A"};
+    install_archive(inst, (t.dir / "fomod.zip").string(), c);
+    CHECK_EQ(slurp(t.dir / "inst/mods/Cho/chosen.txt"), std::string("A"));
+
+    // Choices 缺组且不允许默认 → 报错，不留痕迹
+    InstallOptions m;
+    m.name = "Miss";
+    m.fomod = FomodMode::Choices;
+    CHECK_EQ(code_of([&] { install_archive(inst, (t.dir / "fomod.zip").string(), m); }), std::string("invalid_argument"));
+    CHECK(!fs::exists(t.dir / "inst/mods/Miss"));
+
+    // Raw → 原样安装，包括 fomod 目录与未选文件
+    install_archive(inst, (t.dir / "fomod.zip").string(), "RawMod", false);
+    CHECK(fs::exists(t.dir / "inst/mods/RawMod/fomod/ModuleConfig.xml"));
+    CHECK(fs::exists(t.dir / "inst/mods/RawMod/unselected_extra.txt"));
 }

@@ -6,6 +6,7 @@
 #include "mol/casefold.hpp"
 #include "mol/instance.hpp"
 #include "mol/mod_install.hpp"
+#include "mol/fomod.hpp"
 
 #include "commands.hpp"
 
@@ -109,15 +110,43 @@ Result run_mods_install(Context& ctx) {
     if (!ctx.args.ok()) return make_usage_error(ctx.args.error, ctx);
     const mol::string archive = ctx.args.positionals.front();
     const mol::string name = ctx.args.get("--name", "", ctx.mem);
-    const bool root = ctx.args.get_bool("--root", false);
+    const mol::string fomod_file = ctx.args.get("--fomod", "", ctx.mem);
+    const bool defaults = ctx.args.get_bool("--fomod-defaults", false);
+    const bool raw = ctx.args.get_bool("--no-fomod", false);
+    if ((!fomod_file.empty() ? 1 : 0) + (defaults ? 1 : 0) + (raw ? 1 : 0) > 1)
+        return make_usage_error("mods install: --fomod, --fomod-defaults and --no-fomod are mutually exclusive", ctx);
     const mol::Instance inst = mol::load_instance(ctx.instance_dir, ctx.profile_override(), ctx.mem);
-    const auto res = mol::install_archive(inst, archive, name, root, ctx.profile_override(), ctx.mem);
+
+    mol::InstallOptions opt;
+    opt.name = name;
+    opt.force_root = ctx.args.get_bool("--root", false);
+    opt.profile = ctx.profile_override();
+    if (raw) opt.fomod = mol::FomodMode::Raw;
+    else if (defaults) opt.fomod = mol::FomodMode::Defaults;
+    else if (!fomod_file.empty()) {
+        std::ifstream in{std::string(fomod_file), std::ios::binary};
+        if (!in) throw mol::Error("io_error", "cannot read the FOMOD choices file", std::string(fomod_file));
+        const std::string text((std::istreambuf_iterator<char>(in)), std::istreambuf_iterator<char>());
+        opt.choices = mol::fomod::parse_choices_json(text);
+        opt.fomod = mol::FomodMode::Choices;
+    }
+    // FOMOD 条件里的版本依赖：游戏版本与脚本扩展版本来自游戏层（取不到就用保守默认）
+    if (opt.fomod == mol::FomodMode::Defaults || opt.fomod == mol::FomodMode::Choices) {
+        if (auto v = game_info_string(ctx, inst, "version"); !v.empty()) opt.fomod_env.game_version = v;
+        if (auto v = game_info_string(ctx, inst, "scriptExtender", "version"); !v.empty()) opt.fomod_env.script_extender_version = v;
+    }
+
+    const auto res = mol::install_archive(inst, archive, opt, ctx.mem);
+    ModInstallData d{.name = mol::string(res.name, ctx.mem), .path = mol::string(res.path, ctx.mem),
+                     .root = res.root, .files = res.files, .fomod = res.fomod,
+                     .missing = std::pmr::vector<std::pmr::string>(ctx.mem)};
+    for (const auto& m : res.missing) d.missing.push_back(std::pmr::string(m, ctx.mem));
     Result r(ctx.mem);
     r.ok = true;
     r.exit_code = 0;
     r.command = ctx.command;
-    r.set_data(ModInstallData{.name = mol::string(res.name, ctx.mem), .path = mol::string(res.path, ctx.mem),
-                              .root = res.root, .files = res.files});
+    for (const auto& m : res.missing) r.add_warning("fomod_missing_source", "FOMOD references a file that is not in the archive", m);
+    r.set_data(std::move(d));
     return r;
 }
 

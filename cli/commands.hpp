@@ -11,6 +11,7 @@ Result run_version(Context&);
 Result run_game_info(Context&);
 Result run_plugins_sync(Context&);
 Result run_run(Context&);
+Result run_fomod_inspect(Context&);
 Result run_skse_install(Context&);
 Result run_nexus_login(Context&);
 Result run_nexus_logout(Context&);

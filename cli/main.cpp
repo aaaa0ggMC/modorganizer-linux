@@ -58,6 +58,7 @@ constexpr RouteEntry kRoutes[] = {
     {"mods/enable", "mods enable", &cli::run_mods_enable, {}, 1, "NAME"},
     {"mods/disable", "mods disable", &cli::run_mods_disable, {}, 1, "NAME"},
     {"mods/install", "mods install", &cli::run_mods_install, cli::kOptModsInstall, 1, "ARCHIVE"},
+    {"fomod/inspect", "fomod inspect", &cli::run_fomod_inspect, cli::kOptFomodInspect, 1, "ARCHIVE"},
     {"mods/move", "mods move", &cli::run_mods_move, cli::kOptModsMove, 1, "NAME"},
     {"conflicts", "conflicts", &cli::run_conflicts, cli::kOptConflicts, 0, ""},
     {"plan", "plan", &cli::run_plan, {}, 0, ""},

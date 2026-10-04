@@ -20,6 +20,7 @@
 #include "events.hpp"
 #include "results.hpp"
 #include "mol/error.hpp"
+#include "mol/instance.hpp"
 
 // 见文件头的混用约束：import 放在所有 #include 之后。
 import alib6;
@@ -100,7 +101,9 @@ using CommandFn = Result (*)(Context&);
 
 // ---- 结果构造 --------------------------------------------------------------
 Result make_ok(Context& ctx);                                            // data=空对象
-Result make_usage_error(std::string_view message, Context& ctx);          // invalid_argument/2
+Result make_usage_error(std::string_view message, Context& ctx);
+// 游戏层 info 里的字符串字段（sub_key 非空则取其子对象里的字段）；host 缺失/字段缺失返回空串。
+std::string game_info_string(Context& ctx, const mol::Instance& inst, std::string_view key, std::string_view sub_key = {});          // invalid_argument/2
 Result result_from_mol_error(const mol::Error& e, Context& ctx);
 Result result_from_std_exception(const std::exception& e, Context& ctx);  // 归一 io_error/1
 Result result_from_unknown_command(Context& ctx, std::string_view line);  // invalid_argument/2

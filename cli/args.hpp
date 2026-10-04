@@ -83,6 +83,12 @@ constexpr OptionSpec kOptNexusDownload[] = {
 constexpr OptionSpec kOptModsInstall[] = {
     {"name", "", "--name", "Mod name (default: archive file name)", true},
     {"root", "", "--root", "Force root-style layout (mirrors the game directory)", false},
+    {"fomod", "", "--fomod", "FOMOD choices JSON file (see `fomod inspect`)", true},
+    {"fomod-defaults", "", "--fomod-defaults", "Install a FOMOD with its default choices", false},
+    {"no-fomod", "", "--no-fomod", "Ignore the FOMOD installer and install the archive as-is", false},
+};
+constexpr OptionSpec kOptFomodInspect[] = {
+    {"choices", "", "--choices", "Partial/complete choices JSON; unspecified groups use defaults", true},
 };
 constexpr OptionSpec kOptConflicts[] = {
     {"mod", "", "--mod", "Only conflicts involving this mod", true},

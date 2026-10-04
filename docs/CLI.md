@@ -56,10 +56,11 @@
 - `nexus download (--nxm URL | --mod ID --file ID)`  下载到实例 `downloads/`，并写 MO2 兼容的 `.meta`；支持断点续传；进度走 `--events`（`download`）。Premium 账号可直接 `--mod/--file`；免费账号必须用网页上点“慢速下载”得到的 `nxm://…?key=…&expires=…` 链接，否则 `nexus_premium`。data：`{path,size,game,mod_id,file_id}`。
 - Nexus 错误码：`nexus_auth`(401) `nexus_premium`(403) `nexus_not_found`(404) `nexus_rate_limited`(429，含 Retry-After) `network_error`。基址可用 `MOL_NEXUS_API` 覆盖（测试用）。遵循 http(s)_proxy 环境变量。
 
-- `mods install ARCHIVE [--name N] [--root]`  把压缩包装成 `mods/<name>/` 并以最高优先级启用写入 modlist。解压用外部 `7z`/`7zz`/`bsdtar`（拒绝含符号链接/越界路径的包）；自动去掉多余的单层外壳目录；顶层有 `.exe/.dll` → **根目录型 mod**（`meta.ini` 写 `mol_root=true`，映射到农场根而非 `Data/`，例如 SKSE64）；顶层只有 `Data/` → 取其内容。已有同名 mod 拒绝。data：`{name,path,root,files}`。`mods list` 的每行多了 `root`。mod 根下的 `meta.ini` 不会进农场。不支持 FOMOD。
+- `mods install ARCHIVE [--name N] [--root]`  把压缩包装成 `mods/<name>/` 并以最高优先级启用写入 modlist。解压用外部 `7z`/`7zz`/`bsdtar`（拒绝含符号链接/越界路径的包）；自动去掉多余的单层外壳目录；顶层有 `.exe/.dll` → **根目录型 mod**（`meta.ini` 写 `mol_root=true`，映射到农场根而非 `Data/`，例如 SKSE64）；顶层只有 `Data/` → 取其内容。已有同名 mod 拒绝。data：`{name,path,root,files}`。`mods list` 的每行多了 `root`。mod 根下的 `meta.ini` 不会进农场。FOMOD：压缩包带 `fomod/ModuleConfig.xml` 时必须指明处理方式，否则报 `fomod_choices_required`：`--fomod CHOICES.json`（显式选择；可见的组缺失则报错）、`--fomod-defaults`（全用默认）、`--no-fomod`（忽略安装器，原样装）。三者互斥。data 多了 `fomod`（是否走了 FOMOD）与 `missing`（FOMOD 引用但压缩包里没有的源，同时进 warnings `fomod_missing_source`）。
+- `fomod inspect ARCHIVE [--choices FILE]`  只读。data：`{has_fomod,module_name,steps:[{name,visible,groups:[{name,type,explicit_choice,plugins:[{name,description,image,type,selected}]}]}],files:[{source,destination,folder,priority}]}`。`--choices` 给部分/全部选择，未给的组用默认；步骤可见性与插件类型按**此前步骤设置的标志**求值，所以 GUI 每改一次选择就带累计的 choices 再调一次。choices 文件格式：`{"steps":{"<步骤名>":{"<组名>":["<插件名>",…]}}}`。
 - `skse install`  一键：由游戏版本推出运行时 dll（`skse64_<a>_<b>_<c>.dll`）→ 已就绪则不做任何事 → 否则在 Nexus（mod 30379）选主文件，下载（已下载则复用），装为根目录型 mod `SKSE64` → 校验 dll 与游戏匹配。需要 Nexus API key 与游戏层 host 库。幂等。错误码 `skse_mismatch`：最新的 SKSE64 还不支持该游戏版本。data：`{game_version,runtime_dll,installed,mod_name,file_name,file_id,downloaded}`。
 
-后续：FOMOD、Nexus SSO（需向 Nexus 注册应用 slug）、mod 更新检查。
+后续：FOMOD 的图片提取、Nexus SSO（需向 Nexus 注册应用 slug）、mod 更新检查。
 
 ## 约定
 - 实例与游戏目录输出为绝对 Unix 路径，UTF-8；`plan.ops[].path` 与冲突 `path` 为相对农场根的路径，`plan.ops[].target` 为绝对源路径（无目标时为空）。

@@ -96,6 +96,8 @@ struct ModInstallData {
     std::pmr::string path;
     bool root = false;
     std::size_t files = 0;
+    bool fomod = false;
+    std::pmr::vector<std::pmr::string> missing;  // FOMOD 引用但压缩包里没有的源
 };
 
 // ---- conflicts ------------------------------------------------------------
@@ -196,6 +198,37 @@ struct SkseInstallData {
     std::pmr::string file_name;
     std::int64_t file_id = 0;
     bool downloaded = false;
+};
+
+struct FomodPluginRow {
+    std::pmr::string name;
+    std::pmr::string description;
+    std::pmr::string image;
+    std::pmr::string type;  // Required|Optional|Recommended|NotUsable|CouldBeUsable（按当前选择求值）
+    bool selected = false;
+};
+struct FomodGroupRow {
+    std::pmr::string name;
+    std::pmr::string type;  // SelectExactlyOne 等
+    bool explicit_choice = false;
+    std::pmr::vector<FomodPluginRow> plugins;
+};
+struct FomodStepRow {
+    std::pmr::string name;
+    bool visible = true;
+    std::pmr::vector<FomodGroupRow> groups;
+};
+struct FomodFileRow {
+    std::pmr::string source;
+    std::pmr::string destination;
+    bool folder = false;
+    std::int64_t priority = 0;
+};
+struct FomodInspectData {
+    bool has_fomod = false;
+    std::pmr::string module_name;
+    std::pmr::vector<FomodStepRow> steps;
+    std::pmr::vector<FomodFileRow> files;  // 按当前选择（未给的组用默认）将安装的文件，已排序
 };
 
 // ---- run --------------------------------------------------------------------
