@@ -186,6 +186,12 @@ int mo_game_initialize_profile(mo_game* g, const char* dir, unsigned flags, char
 
 int mo_game_about_to_run(mo_game* g, const char* binary) {
     if (!g) return 1;
+    // 文档目录未知（没有前缀）时上游的 prepareIni 会把 ini 写到「当前目录」——宁可跳过，也不要在用户的目录里乱写文件。
+    {
+        const MOBase::IPluginGame& pg = *g->game;
+        const QString docs = pg.documentsDirectory().absolutePath();
+        if (docs.isEmpty() || !QDir::isAbsolutePath(docs)) return 0;
+    }
     return g->organizer->runAboutToRun(QString::fromUtf8(binary ? binary : "")) ? 0 : 1;
 }
 
