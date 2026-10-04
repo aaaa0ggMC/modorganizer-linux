@@ -37,7 +37,9 @@
 - `unlink`  删除农场（`remove_farm`）；data: `{"removed":bool,"farm_path":"…"}`；农场不存在 → `removed:false`（幂等，不是错误）。
 - `game info`  只读；从实例配置加载 `GameHost`（`MOL_GAME_LIB` 可指定库）。data 为游戏层原始信息对象：`{name,shortName,steamAppId,binaryName,launcherName,nexusGameId,gameDirectory,dataDirectory,documentsDirectory,savesDirectory,installed,looksValid,version,primaryPlugins,dlcPlugins,ccPlugins,iniFiles,variants,executables,scriptExtender}`。`executables` 是 `{title,binary,arguments,workingDirectory}` 数组，`scriptExtender` 是 `{name,loader,loaderPath,installed,version,savegameExtension}` 对象（游戏层可用时出现）。库缺失/加载失败/信息无效 → `game_unavailable`，退出 1；不初始化 profile、不启动游戏。
 - `version`  data: `{"name":"mo-linux","version":"0.0.1"}`
-后续：`plugins sync`、`run`、`doctor`。
+- `plugins sync`  写 profile 与前缀 AppData（不启动游戏）。profile 无 plugins.txt 时先调用上游 `initializeProfile`；随后把上游 `mappings()` 物化为符号链接（目标处已有真实文件 → 改名 `.mol-backup`，已有备份则拒绝）。data：`{"profile","initialized_profile","changed","entries":[{"source","destination","action"}]}`，action ∈ `ok|link|relink|backup+link|skip-missing-source`。幂等。
+
+后续：`run`、`doctor`。
 
 ## 约定
 - 实例与游戏目录输出为绝对 Unix 路径，UTF-8；`plan.ops[].path` 与冲突 `path` 为相对农场根的路径，`plan.ops[].target` 为绝对源路径（无目标时为空）。

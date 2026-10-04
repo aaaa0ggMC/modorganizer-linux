@@ -101,6 +101,20 @@ struct ConflictsData {
     std::size_t count = 0;
 };
 
+// ---- plugins sync -----------------------------------------------------------
+struct SyncRow {
+    std::pmr::string source;
+    std::pmr::string destination;
+    std::pmr::string action;  // ok|link|relink|backup+link|skip-missing-source
+};
+
+struct PluginsSyncData {
+    std::pmr::string profile;
+    bool initialized_profile = false;
+    bool changed = false;
+    std::pmr::vector<SyncRow> entries;
+};
+
 // ---- plan / status / apply / unlink ---------------------------------------
 struct OpCounts {
     std::size_t mkdir = 0;

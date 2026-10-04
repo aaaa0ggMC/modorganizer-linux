@@ -15,6 +15,10 @@ struct Api {
     void (*destroy)(void*) = nullptr;
     char* (*info)(void*) = nullptr;
     void (*free_)(char*) = nullptr;
+    int (*set_profile)(void*, const char*, const char*, const char*, const char*, const char*) = nullptr;
+    char* (*mappings)(void*) = nullptr;
+    int (*init_profile)(void*, const char*, unsigned, char**) = nullptr;
+    int (*about_to_run)(void*, const char*) = nullptr;
 };
 
 fs::path exe_dir() {
@@ -86,6 +90,10 @@ GameHost GameHost::open(std::string_view lib_path) {
     impl->api.destroy = reinterpret_cast<decltype(Api::destroy)>(sym("mo_game_destroy"));
     impl->api.info = reinterpret_cast<decltype(Api::info)>(sym("mo_game_info_json"));
     impl->api.free_ = reinterpret_cast<decltype(Api::free_)>(sym("mo_free"));
+    impl->api.set_profile = reinterpret_cast<decltype(Api::set_profile)>(sym("mo_game_set_profile"));
+    impl->api.mappings = reinterpret_cast<decltype(Api::mappings)>(sym("mo_game_mappings_json"));
+    impl->api.init_profile = reinterpret_cast<decltype(Api::init_profile)>(sym("mo_game_initialize_profile"));
+    impl->api.about_to_run = reinterpret_cast<decltype(Api::about_to_run)>(sym("mo_game_about_to_run"));
     return GameHost(std::move(impl));
 }
 
@@ -116,6 +124,36 @@ string Game::info_json(mr* mem) const {
     string s(p, mem);
     impl_->host->api.free_(p);
     return s;
+}
+
+void Game::set_profile(std::string_view name, std::string_view profile_dir, std::string_view mods_dir,
+                       std::string_view overwrite_dir, std::string_view base_dir) const {
+    const std::string n(name), p(profile_dir), m(mods_dir), o(overwrite_dir), b(base_dir);
+    if (impl_->host->api.set_profile(impl_->game, n.c_str(), p.c_str(), m.c_str(), o.c_str(), b.c_str()) != 0)
+        throw Error("game_unavailable", "mo_game_set_profile failed");
+}
+
+string Game::mappings_json(mr* mem) const {
+    char* p = impl_->host->api.mappings(impl_->game);
+    if (!p) return string("[]", mem);
+    string s(p, mem);
+    impl_->host->api.free_(p);
+    return s;
+}
+
+void Game::initialize_profile(std::string_view dir, unsigned flags) const {
+    const std::string d(dir);
+    char* err = nullptr;
+    if (impl_->host->api.init_profile(impl_->game, d.c_str(), flags, &err) != 0) {
+        std::string msg = err ? err : "initialize_profile failed";
+        if (err) impl_->host->api.free_(err);
+        throw Error("game_unavailable", msg);
+    }
+}
+
+bool Game::about_to_run(std::string_view binary) const {
+    const std::string b(binary);
+    return impl_->host->api.about_to_run(impl_->game, b.c_str()) == 0;
 }
 
 }  // namespace mol

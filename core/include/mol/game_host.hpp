@@ -30,6 +30,15 @@ public:
     Game& operator=(const Game&) = delete;
     // mo_game_info_json 的结果（UTF-8 JSON 文本）。
     string info_json(mr* mem = default_mr()) const;
+    // 设置当前 profile/实例路径（mappings、initialize_profile 之前必须调用）。
+    void set_profile(std::string_view name, std::string_view profile_dir, std::string_view mods_dir,
+                     std::string_view overwrite_dir, std::string_view base_dir) const;
+    // 上游 IPluginFileMapper::mappings() 的 JSON 数组。
+    string mappings_json(mr* mem = default_mr()) const;
+    // flags: 1=MODS 2=CONFIGURATION 4=SAVEGAMES 8=PREFER_DEFAULTS。失败 → Error{game_unavailable}。
+    void initialize_profile(std::string_view dir, unsigned flags) const;
+    // 触发 onAboutToRun 回调；返回是否全部放行。
+    bool about_to_run(std::string_view binary) const;
 
 private:
     friend class GameHost;

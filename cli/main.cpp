@@ -41,6 +41,7 @@ struct RouteEntry {
 constexpr RouteEntry kRoutes[] = {
     {"version", "version", &cli::run_version, {}, 0, ""},
     {"game/info", "game info", &cli::run_game_info, {}, 0, ""},
+    {"plugins/sync", "plugins sync", &cli::run_plugins_sync, {}, 0, ""},
     {"instance/init", "instance init", &cli::run_instance_init, cli::kOptInstanceInit, 0, ""},
     {"instance/show", "instance show", &cli::run_instance_show, {}, 0, ""},
     {"mods/list", "mods list", &cli::run_mods_list, {}, 0, ""},

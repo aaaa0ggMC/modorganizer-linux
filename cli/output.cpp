@@ -129,6 +129,8 @@ std::pmr::vector<std::pmr::string> render_text(const Result& r, mol::mr* mem) {
         add(lines, "game " + S(r.data, "gameDirectory"), mem);
         add(lines, "data " + S(r.data, "dataDirectory"), mem);
         add(lines, "binary " + S(r.data, "binaryName"), mem);
+    } else if (cmd == "plugins sync") {
+        add(lines, std::string("plugins sync ") + (adata::boolean(r.data, "changed") ? "(changed)" : "(unchanged)"), mem);
     } else if (cmd == "instance init") {
         const bool changed = adata::boolean(r.data, "changed");
         add(lines, "instance initialized at " + S(r.data, "root") +
