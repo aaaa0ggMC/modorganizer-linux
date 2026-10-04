@@ -1,7 +1,7 @@
 #pragma once
 // 按 Wabbajack 清单重建实例目录（即 MO2 便携实例：mods/、profiles/、ModOrganizer.ini …）。
 // 可续跑、幂等：每个压缩包处理完就记入 <输出>/.mol-wabbajack/state.json；需要人介入的项记为 pending 并继续其它项。
-// 暂不支持的指令（CreateBSA / TransformedTexture / MergedPatch / 其它）不会被执行，只计数并作为 pending(kind=unsupported) 报告。
+// 暂不支持的指令（TransformedTexture / MergedPatch / 其它）不会被执行，只计数并作为 pending(kind=unsupported) 报告。
 #include <functional>
 #include <string>
 #include <vector>
@@ -33,6 +33,7 @@ struct Report {
     std::int64_t archives_total = 0, archives_done = 0, files_written = 0, files_failed = 0;
     std::vector<Pending> pending;
     std::vector<std::string> failures;  // 非致命失败（hash 不符、缺文件……），每条一句话
+    std::vector<std::string> notes;     // 不算失败的提示（如压缩 BSA 的字节差异）
     bool complete() const { return pending.empty() && failures.empty(); }
 };
 

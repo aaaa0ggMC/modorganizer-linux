@@ -210,10 +210,12 @@ Result run_wabbajack_install(Context& ctx) {
 
         WjInstallData d{.status = P(rep.complete() ? "complete" : "incomplete", ctx.mem), .instance = P(ctx.instance_dir, ctx.mem), .archives_total = rep.archives_total,
                         .archives_done = rep.archives_done, .files_written = rep.files_written, .files_failed = rep.files_failed,
-                        .pending = std::pmr::vector<CollectionPendingRow>(ctx.mem), .failures = std::pmr::vector<std::pmr::string>(ctx.mem)};
+                        .pending = std::pmr::vector<CollectionPendingRow>(ctx.mem), .failures = std::pmr::vector<std::pmr::string>(ctx.mem), .notes = std::pmr::vector<std::pmr::string>(ctx.mem)};
         for (const auto& p : rep.pending) d.pending.push_back(CollectionPendingRow{P(std::to_string(p.count), ctx.mem), P(p.name, ctx.mem), P(p.kind, ctx.mem), P(p.detail, ctx.mem), P(p.url, ctx.mem)});
         for (const auto& f : rep.failures) d.failures.push_back(P(f, ctx.mem));
+        for (const auto& n : rep.notes) d.notes.push_back(P(n, ctx.mem));
         Result r = ok(ctx, rep.complete() ? 0 : 4);
+        for (const auto& n : rep.notes) r.add_warning("wabbajack_note", n, "");
         r.set_data(std::move(d));
         if (sink != nullptr) sink->done("wabbajack install", rep.complete());
         return r;

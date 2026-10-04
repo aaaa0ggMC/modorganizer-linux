@@ -6,6 +6,7 @@
 
 #include "minitest.hpp"
 #include "mock_http.hpp"
+#include "mol/bsa.hpp"
 #include "mol/wabbajack.hpp"
 #include "mol/wabbajack_install.hpp"
 #include "mol/xxh64.hpp"
@@ -75,7 +76,7 @@ TEST(parse_modlist_sources_and_directives) {
  "Directives":[
   {"$type":"FromArchive","ArchiveHashPath":["h1","dir\\f.txt"],"To":"mods\\M\\f.txt","Hash":"x","Size":3},
   {"$type":"InlineFile","SourceDataID":"g1","To":"a.txt","Hash":"y","Size":1},
-  {"$type":"CreateBSA","To":"mods\\M\\x.bsa","TempID":"t"}]})";
+  {"$type":"MergedPatch","To":"mods\\M\\x.bsa"}]})";
     const Modlist m = parse_modlist(json);
     CHECK_EQ(m.name, std::string("L"));
     CHECK_EQ(m.archives.size(), std::size_t{4});
@@ -138,8 +139,8 @@ TEST(install_modlist_end_to_end_with_resume_and_pending) {
   {"$type":"InlineFile","SourceDataID":"inline1","To":"readme.txt","Hash":")" + H("INLINE") + R"(","Size":6},
   {"$type":"RemappedInlineFile","SourceDataID":"remap1","To":"ModOrganizer.ini","Hash":"x","Size":1},
   {"$type":"FromArchive","ArchiveHashPath":["AAAAAAAAAAA=","x.txt"],"To":"mods\\N\\x.txt","Hash":"x","Size":1},
-  {"$type":"CreateBSA","To":"mods\\M\\x.bsa","TempID":"t"},
-  {"$type":"CreateBSA","To":"mods\\M\\y.bsa","TempID":"u"}]})";
+  {"$type":"TransformedTexture","To":"mods\\M\\x.dds"},
+  {"$type":"TransformedTexture","To":"mods\\M\\y.dds"}]})";
     // modlist 里的 @URL@ 在启动 mock 之后替换
     std::atomic<int> hits{0};
     Mock srv([&](const Req& r) -> Resp {
@@ -222,4 +223,48 @@ TEST(directive_whose_source_is_the_archive_file_itself) {
     const Report r = install_modlist(parse_modlist(json), (t.dir / "t.wabbajack").string(), opt);
     CHECK(r.complete());
     CHECK_EQ(slurp(t.dir / "out/mods/Cleaned/g.esm"), payload);
+}
+
+TEST(create_bsa_from_loose_files_and_extract_from_a_bsa_source) {
+    if (!have_tools()) return;
+    Tmp t;
+    // 源 1：一个真正的 BSA（像游戏目录里的 CC 包），里面有两个文件；Wabbajack 会从它「解压」文件
+    put(t.dir / "orig/meshes/a.nif", "NIF-A");
+    put(t.dir / "orig/textures/b.dds", "DDS-B");
+    bsa::write((t.dir / "game.bsa").string(), bsa::Header{105, 0x3, 0},
+               {{"meshes\\a.nif", (t.dir / "orig/meshes/a.nif").string(), false}, {"textures\\b.dds", (t.dir / "orig/textures/b.dds").string(), false}});
+    const std::string bsa_hash = wj_file_hash((t.dir / "game.bsa").string());
+    const auto bsa_size = fs::file_size(t.dir / "game.bsa");
+    // 期望的产物：用同样的文件与标志重新打包
+    put(t.dir / "exp/meshes/a.nif", "NIF-A");
+    put(t.dir / "exp/textures/b.dds", "DDS-B");
+    bsa::write((t.dir / "expected.bsa").string(), bsa::Header{105, 0x3, 0},
+               {{"meshes\\a.nif", (t.dir / "exp/meshes/a.nif").string(), false}, {"textures\\b.dds", (t.dir / "exp/textures/b.dds").string(), false}});
+    const std::string want = wj_file_hash((t.dir / "expected.bsa").string());
+    Mock srv([&](const Req& r) -> Resp { return r.target == "/game.bsa" ? Resp{200, slurp(t.dir / "game.bsa"), ""} : Resp{404, "", ""}; });
+    const std::string json = std::string(R"({"Name":"T","GameType":"SkyrimSpecialEdition","Archives":[{"Hash":")") + bsa_hash + R"(","Name":"game.bsa","Size":)" + std::to_string(bsa_size) +
+        R"(,"State":{"$type":"HttpDownloader, Wabbajack.Lib","Url":")" + srv.base() + R"(/game.bsa"}}],"Directives":[
+        {"$type":"FromArchive","ArchiveHashPath":[")" + bsa_hash + R"(","meshes\\a.nif"],"To":"TEMP_BSA_FILES\\tid1\\meshes\\a.nif","Hash":")" + H("NIF-A") + R"(","Size":5},
+        {"$type":"FromArchive","ArchiveHashPath":[")" + bsa_hash + R"(","textures\\b.dds"],"To":"TEMP_BSA_FILES\\tid1\\textures\\b.dds","Hash":")" + H("DDS-B") + R"(","Size":5},
+        {"$type":"CreateBSA","TempID":"tid1","To":"mods\\Out\\out.bsa","Hash":")" + want + R"(","Size":0,
+         "State":{"$type":"BSAState, Compression.BSA","ArchiveFlags":3,"FileFlags":0,"Magic":"BSA\u0000","Version":105},
+         "FileStates":[{"$type":"BSAFileState, Compression.BSA","FlipCompression":false,"Index":0,"Path":"meshes\\a.nif"},
+                       {"$type":"BSAFileState, Compression.BSA","FlipCompression":false,"Index":0,"Path":"textures\\b.dds"}]}]})";
+    put(t.dir / "wj/modlist", json);
+    (void)!std::system(("cd '" + (t.dir / "wj").string() + "' && zip -qr '" + (t.dir / "t.wabbajack").string() + "' . >/dev/null 2>&1").c_str());
+    const Modlist ml = parse_modlist(json);
+    CHECK(ml.directives[2].kind == Kind::CreateBSA);
+    CHECK_EQ(ml.directives[2].bsa_files.size(), std::size_t{2});
+    CHECK_EQ(ml.directives[2].bsa_flags, std::uint32_t{3});
+    InstallOptions opt;
+    opt.output_dir = (t.dir / "out").string();
+    const Report r = install_modlist(ml, (t.dir / "t.wabbajack").string(), opt);
+    CHECK(r.complete());
+    CHECK_EQ(wj_file_hash((t.dir / "out/mods/Out/out.bsa").string()), want);   // 逐字节与期望一致
+    CHECK(!fs::exists(t.dir / "out/TEMP_BSA_FILES"));                          // 临时文件已清理
+    const auto idx = bsa::read_index((t.dir / "out/mods/Out/out.bsa").string());
+    CHECK_EQ(idx.files.size(), std::size_t{2});
+    // 重跑：幂等
+    const Report r2 = install_modlist(ml, (t.dir / "t.wabbajack").string(), opt);
+    CHECK(r2.complete());
 }

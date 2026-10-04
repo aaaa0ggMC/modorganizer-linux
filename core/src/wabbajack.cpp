@@ -169,7 +169,7 @@ std::string gunzip(std::string_view in) {
 
 }  // namespace
 
-bool supported(Kind k) { return k == Kind::FromArchive || k == Kind::PatchedFromArchive || k == Kind::InlineFile || k == Kind::RemappedInlineFile || k == Kind::Ignored; }
+bool supported(Kind k) { return k == Kind::FromArchive || k == Kind::PatchedFromArchive || k == Kind::InlineFile || k == Kind::RemappedInlineFile || k == Kind::CreateBSA || k == Kind::Ignored; }
 
 const char* kind_name(Kind k) {
     switch (k) {
@@ -228,6 +228,16 @@ Modlist parse_modlist(std::string_view json) {
         x.source_data_id = S(d, "SourceDataID");
         x.patch_id = S(d, "PatchID");
         x.size = I(d, "Size");
+        if (x.kind == Kind::CreateBSA) {
+            x.temp_id = S(d, "TempID");
+            if (const auto* st = sub(d, "State")) {
+                x.bsa_version = static_cast<std::uint32_t>(I(*st, "Version"));
+                x.bsa_flags = static_cast<std::uint32_t>(I(*st, "ArchiveFlags"));
+                x.bsa_file_flags = static_cast<std::uint32_t>(I(*st, "FileFlags"));
+            }
+            if (const auto* fs_ = sub(d, "FileStates"); fs_ && fs_->is_array())
+                for (const auto& f : fs_->array()) x.bsa_files.push_back({S(f, "Path"), B(f, "FlipCompression")});
+        }
         m.directives.push_back(std::move(x));
     }
     return m;

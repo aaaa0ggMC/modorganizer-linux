@@ -8,7 +8,7 @@
 //   PatchedFromArchive     取文件后用 OctoDiff 补丁（PatchID）打补丁
 //   InlineFile             清单自带的数据（SourceDataID）原样写出
 //   RemappedInlineFile     同上，但写出前把路径占位符替换成本机路径
-//   CreateBSA              用其它指令产出的文件打包 BSA（尚未支持）
+//   CreateBSA              用其它指令产出（落在 TEMP_BSA_FILES\\<TempID>\\…）的文件按原作者的标志重新打包 BSA（SSE v104/105，见 bsa.hpp）
 //   TransformedTexture     重编码贴图（尚未支持）
 //   MergedPatch / 其它      尚未支持
 // 路径用反斜杠、大小写不敏感。
@@ -43,12 +43,21 @@ struct Archive {
 
 enum class Kind { FromArchive, PatchedFromArchive, InlineFile, RemappedInlineFile, CreateBSA, TransformedTexture, MergedPatch, Ignored, Other };
 
+struct BsaFileState {
+    std::string path;  // 归档内路径
+    bool flip = false;
+};
+
 struct Directive {
     std::string type;  // $type 原文
     Kind kind = Kind::Other;
     std::vector<std::string> archive_path;  // [archive hash, path in archive, (nested path…)]
     std::string to, hash, from_hash, source_data_id, patch_id;
     std::int64_t size = 0;
+    // CreateBSA
+    std::string temp_id;
+    std::uint32_t bsa_version = 105, bsa_flags = 0, bsa_file_flags = 0;
+    std::vector<BsaFileState> bsa_files;
 };
 
 struct Modlist {

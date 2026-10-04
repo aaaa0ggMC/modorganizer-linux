@@ -27,7 +27,9 @@ target_compile_options(mocore PRIVATE -Wall -Wextra)
 find_package(CURL REQUIRED)
 find_package(EXPAT REQUIRED)
 find_package(ZLIB REQUIRED)
-target_link_libraries(mocore PUBLIC mol_alib6 CURL::libcurl EXPAT::EXPAT ZLIB::ZLIB)
+find_package(PkgConfig REQUIRED)
+pkg_check_modules(LZ4 REQUIRED IMPORTED_TARGET liblz4)
+target_link_libraries(mocore PUBLIC mol_alib6 CURL::libcurl EXPAT::EXPAT ZLIB::ZLIB PkgConfig::LZ4)
 
 # ---- CLI --------------------------------------------------------------------
 file(GLOB CLI_SRC CONFIGURE_DEPENDS cli/*.cpp)

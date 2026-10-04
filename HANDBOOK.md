@@ -47,7 +47,9 @@
 
 **Wabbajack 真实大列表实测（A Dragonborn's Fate：124 个压缩包、16461 条指令、5.6GB，Premium key）**：约 20 分钟下完并装好——118/124 个压缩包完成、15446+ 个文件写出且逐个 hash 校验通过；产出的实例被 mo-linux 直接读懂（130 个 mod、113 个启用、76 个插件无 master 问题、`plan` 15220 个操作、0 个合并警告）。剩下 6 个未完成：2 个 Nexus 已 404（作者撤下的旧文件，含清单里自带的 MO2 本体）→ `manual_download` pending；4 个来自游戏目录的 esm（Dawnguard/HearthFires/Dragonborn/Update）hash 与清单不符——清单是按另一个游戏版本打的补丁，**这是真实的版本不匹配，不是 bug**。实测中发现并修复：①`ArchiveHashPath` 只有一项（源文件就是下载文件本身）时被误判为畸形指令；②`instance` 的 profile 应取清单自带 `selected_profile`。
 
-**Wabbajack 的现实边界**：只实现了 FromArchive（含嵌套）/PatchedFromArchive(OctoDiff)/InlineFile/RemappedInlineFile。很多大型列表会用到 `CreateBSA`（重新打包 BSA）与 `TransformedTexture`（贴图重编码），这些**没实现**，会作为 `unsupported` 报告，列表因此是 partial。`inspect` 的 `verdict` 能在下载前告诉你。`gamefile` 来源（直接取游戏目录里的文件）要求游戏版本与清单一致，否则 hash 不符。
+**Wabbajack 的现实边界**：实现了 FromArchive（含嵌套、含 BSA 作来源）/PatchedFromArchive(OctoDiff)/InlineFile/RemappedInlineFile/CreateBSA。**没实现** `TransformedTexture`（贴图重编码）与 MergedPatch，会作为 `unsupported` 报告，列表因此是 partial。
+
+**数据驱动的取舍**：对画廊里 12 个体积最小的 SSE 列表跑 `inspect`——7 个 full、4 个仅缺 CreateBSA（每个 1–17 条）、1 个缺 CreateBSA+154 条 TransformedTexture。所以补了 CreateBSA（BSA 读写，`core/src/bsa.cpp`），TransformedTexture 暂缓（影响面小、要 DDS 编码器）。**BSA 写出器用游戏自带的 4 个真实 BSA 验证过**：哈希函数与每条记录一致，重建结果与原文件逐字节相同（唯一差异是官方工具在文件夹记录 padding 里留的未初始化垃圾字节）；LZ4 压缩路径只有往返测试，没有字节级标准答案。用真实列表 ASSOS 里的一条 CreateBSA（ccBGSSSE037-Curios，218 个文件，其中 66 个 OctoDiff 补丁）做了端到端：152 个 FromArchive + 66 个补丁全部与清单 hash 吻合、BSA 构建成功（与作者构建仅 padding/哈希字节差异，记为 note）。`inspect` 的 `verdict` 能在下载前告诉你。`gamefile` 来源（直接取游戏目录里的文件）要求游戏版本与清单一致，否则 hash 不符。
 
 **Collections 的交互设计**：不能中途提问 ⇒ 可续跑 + incomplete（退出码 4）。遇到需要人的 mod（`manual_download` 免费账号、`fomod_choices` 清单没给选择、`unsupported` 带 patches/bundle）只记 pending 并继续其它 mod；`collection resolve` 记下决定，再 `collection install` 续跑。详见 docs/CLI.md「Collections」。mock 集成测试覆盖：第一轮 1 装 2 挂起 → resolve → 离线第二轮全完成且不重复下载 → 第三轮幂等；md5 不符删文件并 failed。
 
@@ -249,6 +251,7 @@ Claude 阶段的提交带 `Co-Authored-By` 与 `Claude-Session`；接续提交�
 | R14 | `overwrite promote --yes` 是破坏性的、不可撤销的（文件移进真实游戏 Data，不再受我们管理）；目标已存在时跳过不覆盖 | 低 |
 | R15 | FOMOD 只在合成包上测过；与 MO2 的差异：忽略 alwaysInstall/installIfUsable（与 MO2 一致）、`moduleDependencies` 不检查；图片不提取 | 中 |
 | R16 | Nexus 个人 key 仅限个人/测试；公开发布需向 Nexus 注册应用拿 SSO slug（官方流程见 §0.1）。API 限流（日/时额度）已映射为 `nexus_rate_limited` 但未做退避重试 | 中 |
+| R19 | CreateBSA 的清单 Hash 与我们重建的 BSA 不一致（作者打包器的 padding/压缩编码差异）只提示不失败；若某个游戏版本对 padding 字节敏感则会暴露——目前所有真实 BSA 的 padding 都是垃圾值，游戏照常加载 | 低 |
 | R18 | Wabbajack 安装对每个压缩包是「完整解压到临时目录再复制」，大压缩包会短时占双倍磁盘；Nexus 来源按文件名/大小+xxh64 匹配本地缓存，免费账号全部变 pending；清单里的 Nexus `GameName` 直接小写当域名 | 低 |
 | R17 | `skse install` 依赖 Nexus 主文件标记与 SKSE 的 dll 命名规则（`skse64_<a>_<b>_<c>.dll`）；官方改规则时要跟 | 低 |
 | R12 | **alib6 的 4 处修改未提交**，且第 3 点是行为变更；若作者在别处使用了"同时声明破折号别名与 name，并依赖裸 name 匹配"的写法会受影响 | 中 |

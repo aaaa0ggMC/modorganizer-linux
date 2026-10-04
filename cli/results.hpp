@@ -463,6 +463,7 @@ struct WjInstallData {
     std::int64_t files_failed = 0;
     std::pmr::vector<CollectionPendingRow> pending;  // key=压缩包/指令类型，kind 同上
     std::pmr::vector<std::pmr::string> failures;
+    std::pmr::vector<std::pmr::string> notes;
 };
 
 struct OutdatedRow {

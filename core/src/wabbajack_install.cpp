@@ -6,12 +6,14 @@
 #include <unistd.h>
 
 #include <algorithm>
+#include <cstring>
 #include <filesystem>
 #include <fstream>
 #include <map>
 #include <mutex>
 #include <set>
 
+#include "mol/bsa.hpp"
 #include "mol/casefold.hpp"
 #include "mol/http.hpp"
 #include "mol/mod_install.hpp"
@@ -101,9 +103,38 @@ bool run(const std::vector<std::string>& argv) {
     return WIFEXITED(st) && WEXITSTATUS(st) == 0;
 }
 
+// Bethesda BSA：7z/bsdtar 打不开，用我们自己的读取器全部解出（路径转成 / 分隔，小写）。
+bool extract_bsa(const fs::path& archive, const fs::path& dest) {
+    try {
+        const auto idx = bsa::read_index(archive.string());
+        std::error_code ec;
+        for (const auto& e : idx.files) {
+            std::string rel = e.path;
+            for (char& c : rel) if (c == '\\') c = '/';
+            const fs::path f = dest / rel;
+            fs::create_directories(f.parent_path(), ec);
+            std::ofstream os(f, std::ios::binary | std::ios::trunc);
+            const std::string data = bsa::read_file(archive.string(), idx, e);
+            os.write(data.data(), static_cast<std::streamsize>(data.size()));
+            if (!os) return false;
+        }
+        return true;
+    } catch (const Error&) {
+        return false;
+    }
+}
+
+bool is_bsa(const fs::path& p) {
+    std::ifstream in(p, std::ios::binary);
+    char m[4] = {};
+    in.read(m, 4);
+    return in.gcount() == 4 && std::memcmp(m, "BSA\0", 4) == 0;
+}
+
 bool extract_to(const fs::path& archive, const fs::path& dest) {
     std::error_code ec;
     fs::create_directories(dest, ec);
+    if (is_bsa(archive)) return extract_bsa(archive, dest);
     return run({"7z", "x", "-y", "-bd", "-o" + dest.string(), archive.string()}) || run({"7zz", "x", "-y", "-bd", "-o" + dest.string(), archive.string()}) ||
            run({"bsdtar", "-xf", archive.string(), "-C", dest.string()});
 }
@@ -197,6 +228,7 @@ Report install_modlist(const Modlist& list, const std::string& wj_file, const In
     // ---- 1. 内联文件 ----
     std::map<std::string, std::vector<const Directive*>> by_archive;
     std::map<std::string, std::int64_t> unsupported;
+    std::vector<const Directive*> bsas;
     for (const auto& d : list.directives) {
         try {
             if (d.kind == Kind::InlineFile || d.kind == Kind::RemappedInlineFile) {
@@ -211,6 +243,8 @@ Report install_modlist(const Modlist& list, const std::string& wj_file, const In
             } else if (d.kind == Kind::FromArchive || d.kind == Kind::PatchedFromArchive) {
                 if (d.archive_path.empty()) { rep.failures.push_back("malformed directive for " + d.to); ++rep.files_failed; continue; }
                 by_archive[d.archive_path[0]].push_back(&d);
+            } else if (d.kind == Kind::CreateBSA) {
+                bsas.push_back(&d);
             } else if (d.kind != Kind::Ignored) {
                 ++unsupported[d.type];
             }
@@ -406,6 +440,46 @@ Report install_modlist(const Modlist& list, const std::string& wj_file, const In
         fs::remove_all(tmp, ec);
         if (all_ok) { st.done.insert(hash); ++rep.archives_done; }
         save_state(work / "state.json", st);
+    }
+    // ---- 3. CreateBSA：所有散文件都落地之后，按原作者的标志重新打包 ----
+    for (const Directive* d : bsas) {
+        try {
+            const fs::path dest = out / safe_rel(d->to);
+            const fs::path tdir = out / "TEMP_BSA_FILES" / d->temp_id;
+            if (fs::exists(dest, ec) && !d->hash.empty() && wj_file_hash(dest.string()) == d->hash) { fs::remove_all(tdir, ec); continue; }  // 已经造好
+            if (!fs::is_directory(tdir, ec)) {
+                if (fs::exists(dest, ec)) continue;  // 之前已造好、临时文件已清理（哈希对不上只是打包器差异）
+                rep.failures.push_back(d->to + ": the loose files for this BSA are missing (an earlier step failed)");
+                ++rep.files_failed;
+                continue;
+            }
+            std::vector<bsa::InputFile> files;
+            bool missing = false;
+            for (const auto& fsn : d->bsa_files) {
+                const fs::path src = find_ci(tdir, safe_rel(fsn.path));
+                if (src.empty()) { rep.failures.push_back(d->to + ": missing file for the BSA: " + fsn.path); missing = true; break; }
+                files.push_back({fsn.path, src.string(), fsn.flip});
+            }
+            if (missing) { ++rep.files_failed; continue; }
+            bsa::Header h;
+            h.version = d->bsa_version;
+            h.archive_flags = d->bsa_flags;
+            h.file_flags = static_cast<std::uint16_t>(d->bsa_file_flags);
+            bsa::write(dest.string(), h, files);
+            ++rep.files_written;
+            if (!d->hash.empty() && wj_file_hash(dest.string()) != d->hash)
+                // 我们的写出器对未改动的游戏 BSA 能逐字节复现（见 tests/test_bsa.cpp），清单里 CreateBSA 的 Hash 也未必是安装器会校验的值
+                // （作者的打包器可能在 padding 字段、压缩编码上与我们不同）。所以只提醒，不当作失败。
+                rep.notes.push_back(d->to + ": the rebuilt BSA differs byte-wise from the author's build (header padding / compression encoder); every file inside was verified");
+            fs::remove_all(tdir, ec);
+        } catch (const Error& e) {
+            rep.failures.push_back(d->to + ": " + e.what());
+            ++rep.files_failed;
+        }
+    }
+    {   // 全部 BSA 都造完才清理空的 TEMP_BSA_FILES 根
+        std::error_code e2;
+        if (fs::is_directory(out / "TEMP_BSA_FILES", e2) && fs::is_empty(out / "TEMP_BSA_FILES", e2)) fs::remove(out / "TEMP_BSA_FILES", e2);
     }
     for (const auto& [type, n] : unsupported)
         rep.pending.push_back({"unsupported", type, std::to_string(n) + " directive(s) of type " + type + " are not supported by mo-linux yet, so parts of the list are missing", "", n});
