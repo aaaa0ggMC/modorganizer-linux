@@ -204,3 +204,22 @@ TEST(install_modlist_hash_mismatch_download_is_deleted_and_reported) {
     CHECK(!fs::exists(t.dir / "out/downloads/p.zip"));
     CHECK(!fs::exists(t.dir / "out/a.txt"));
 }
+
+TEST(directive_whose_source_is_the_archive_file_itself) {
+    if (!have_tools()) return;
+    Tmp t;
+    const std::string payload = "THIS IS NOT AN ARCHIVE, IT IS A PLUGIN FILE";
+    put(t.dir / "src.esm", payload);
+    const std::string h = H(payload);
+    Mock srv([&](const Req& r) -> Resp { return r.target == "/g.esm" ? Resp{200, payload, ""} : Resp{404, "", ""}; });
+    const std::string json = std::string(R"({"Name":"T","GameType":"SkyrimSpecialEdition","Archives":[{"Hash":")") + h + R"(","Name":"g.esm","Size":)" + std::to_string(payload.size()) +
+                             R"(,"State":{"$type":"HttpDownloader, Wabbajack.Lib","Url":")" + srv.base() + R"(/g.esm"}}],"Directives":[
+        {"$type":"FromArchive","ArchiveHashPath":[")" + h + R"("],"To":"mods\\Cleaned\\g.esm","Hash":")" + h + R"(","Size":)" + std::to_string(payload.size()) + R"(}]})";
+    put(t.dir / "wj/modlist", json);
+    (void)!std::system(("cd '" + (t.dir / "wj").string() + "' && zip -qr '" + (t.dir / "t.wabbajack").string() + "' . >/dev/null 2>&1").c_str());
+    InstallOptions opt;
+    opt.output_dir = (t.dir / "out").string();
+    const Report r = install_modlist(parse_modlist(json), (t.dir / "t.wabbajack").string(), opt);
+    CHECK(r.complete());
+    CHECK_EQ(slurp(t.dir / "out/mods/Cleaned/g.esm"), payload);
+}

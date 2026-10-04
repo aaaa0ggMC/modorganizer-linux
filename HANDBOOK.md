@@ -45,6 +45,8 @@
 | Agent 框架 | `schema`、`next`、`logs`、错误 `hint`、doctor `fix`，`docs/AGENT.md` | `schema` 列出全部命令的 effects/needs/confirm/idempotent 与错误码；`next` 把 doctor + 集合状态 + 缺 key 汇成有序步骤（带 needs_human/confirm/blocking）；游戏在跑时 `next` 不建议再启动。check_cli.py 断言每个命令都有元数据 |
 | Wabbajack | `wabbajack search/inspect/install` | **真实实测**：画廊 229 个列表（并行 + 6h 缓存，首次 5s、之后 12ms）；`.wabbajack` 经 authored-files 分片下载并按 xxh64 校验通过；Halgari's Helper（MO2 2.4.4，1512 个文件）端到端装好，输出文件逐个 hash 校验、占位符已替换、二次运行幂等。「A Dragonborn's Fate」（124 个压缩包、16461 条指令）与「Skyrim Modding Essentials」（301 个、21541 条）指令层面都是 `full` 可装 |
 
+**Wabbajack 真实大列表实测（A Dragonborn's Fate：124 个压缩包、16461 条指令、5.6GB，Premium key）**：约 20 分钟下完并装好——118/124 个压缩包完成、15446+ 个文件写出且逐个 hash 校验通过；产出的实例被 mo-linux 直接读懂（130 个 mod、113 个启用、76 个插件无 master 问题、`plan` 15220 个操作、0 个合并警告）。剩下 6 个未完成：2 个 Nexus 已 404（作者撤下的旧文件，含清单里自带的 MO2 本体）→ `manual_download` pending；4 个来自游戏目录的 esm（Dawnguard/HearthFires/Dragonborn/Update）hash 与清单不符——清单是按另一个游戏版本打的补丁，**这是真实的版本不匹配，不是 bug**。实测中发现并修复：①`ArchiveHashPath` 只有一项（源文件就是下载文件本身）时被误判为畸形指令；②`instance` 的 profile 应取清单自带 `selected_profile`。
+
 **Wabbajack 的现实边界**：只实现了 FromArchive（含嵌套）/PatchedFromArchive(OctoDiff)/InlineFile/RemappedInlineFile。很多大型列表会用到 `CreateBSA`（重新打包 BSA）与 `TransformedTexture`（贴图重编码），这些**没实现**，会作为 `unsupported` 报告，列表因此是 partial。`inspect` 的 `verdict` 能在下载前告诉你。`gamefile` 来源（直接取游戏目录里的文件）要求游戏版本与清单一致，否则 hash 不符。
 
 **Collections 的交互设计**：不能中途提问 ⇒ 可续跑 + incomplete（退出码 4）。遇到需要人的 mod（`manual_download` 免费账号、`fomod_choices` 清单没给选择、`unsupported` 带 patches/bundle）只记 pending 并继续其它 mod；`collection resolve` 记下决定，再 `collection install` 续跑。详见 docs/CLI.md「Collections」。mock 集成测试覆盖：第一轮 1 装 2 挂起 → resolve → 离线第二轮全完成且不重复下载 → 第三轮幂等；md5 不符删文件并 failed。

@@ -207,7 +207,7 @@ Report install_modlist(const Modlist& list, const std::string& wj_file, const In
                 write_out(d.to, content);
                 ++rep.files_written;
             } else if (d.kind == Kind::FromArchive || d.kind == Kind::PatchedFromArchive) {
-                if (d.archive_path.size() < 2) { rep.failures.push_back("malformed directive for " + d.to); ++rep.files_failed; continue; }
+                if (d.archive_path.empty()) { rep.failures.push_back("malformed directive for " + d.to); ++rep.files_failed; continue; }
                 by_archive[d.archive_path[0]].push_back(&d);
             } else if (d.kind != Kind::Ignored) {
                 ++unsupported[d.type];
@@ -286,7 +286,10 @@ Report install_modlist(const Modlist& list, const std::string& wj_file, const In
                     continue;
                 }
             } catch (const Error& e) {
-                if (e.code == "nexus_premium")
+                if (e.code == "nexus_not_found")
+                    rep.pending.push_back({"manual_download", a.name + "  [nexus]", "Nexus no longer serves this file (404; the author removed or replaced it). Find the same file elsewhere and put it into the downloads directory; it is matched by size + hash",
+                                           "https://www.nexusmods.com/" + s.game_domain + "/mods/" + std::to_string(s.mod_id) + "?tab=files&file_id=" + std::to_string(s.file_id), static_cast<std::int64_t>(dirs.size())});
+                else if (e.code == "nexus_premium")
                     rep.pending.push_back({"manual_download", a.name + "  [nexus]", "a free Nexus account cannot download this directly; download it in the browser into the downloads directory",
                                            "https://www.nexusmods.com/" + s.game_domain + "/mods/" + std::to_string(s.mod_id) + "?tab=files&file_id=" + std::to_string(s.file_id), static_cast<std::int64_t>(dirs.size())});
                 else
@@ -303,11 +306,15 @@ Report install_modlist(const Modlist& list, const std::string& wj_file, const In
         // 2b 解压并执行指令
         const fs::path tmp = work / "tmp" / safe_name(hash);
         fs::remove_all(tmp, ec);
-        progress("extract", a.name, 0, 0);
-        if (!extract_to(file, tmp)) {
-            rep.failures.push_back(a.name + ": extraction failed");
-            fs::remove_all(tmp, ec);
-            continue;
+        // 路径只有「压缩包哈希」一项时，源文件就是下载下来的这个文件本身（例如取自游戏目录的 esm），不需要解压。
+        const bool need_extract = std::any_of(dirs.begin(), dirs.end(), [](const Directive* d) { return d->archive_path.size() >= 2; });
+        if (need_extract) {
+            progress("extract", a.name, 0, 0);
+            if (!extract_to(file, tmp)) {
+                rep.failures.push_back(a.name + ": extraction failed");
+                fs::remove_all(tmp, ec);
+                continue;
+            }
         }
         bool all_ok = true;
         for (const Directive* d : dirs) {
@@ -315,7 +322,7 @@ Report install_modlist(const Modlist& list, const std::string& wj_file, const In
                 // 嵌套压缩包：archive_path[1..n-1] 依次是「里面的压缩包」，最后一项才是目标文件
                 fs::path root = tmp;
                 std::vector<fs::path> nested_tmps;
-                fs::path src;
+                fs::path src = file;  // archive_path.size()==1：文件本身
                 for (std::size_t k = 1; k < d->archive_path.size(); ++k) {
                     const fs::path found = find_ci(root, safe_rel(d->archive_path[k]));
                     if (found.empty()) throw Error("not_found", "file not found inside the archive: " + d->archive_path[k]);

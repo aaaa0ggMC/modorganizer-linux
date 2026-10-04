@@ -6,6 +6,7 @@
 #include "mol/casefold.hpp"
 #include "mol/http.hpp"
 #include "mol/instance.hpp"
+#include "mol/mo2fmt.hpp"
 #include "mol/nexus.hpp"
 #include "mol/steam_detect.hpp"
 #include "mol/wabbajack.hpp"
@@ -195,6 +196,10 @@ Result run_wabbajack_install(Context& ctx) {
             io.prefix = pf;
             io.proton_path = pr;
             io.steam_root = sr;
+            // 清单自带的 MO2 配置里选中的 profile 才是作者想让你用的（默认的 "Default" 往往是空的）
+            std::string prof;
+            if (auto v = mol::Ini::load((fs::path(root) / "ModOrganizer.ini").string(), ctx.mem).get("General", "selected_profile", ctx.mem)) prof = std::string(*v);
+            io.profile = prof.empty() ? std::string_view("Default") : std::string_view(prof);
             if (!pf.empty()) mol::init_instance(io);
         }
 
