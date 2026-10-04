@@ -20,7 +20,7 @@
 日志一律走 stderr，stdout 只有结果。
 
 ## 进度事件（`--events`）
-每行一个 JSON：`{"event":"progress","op":"apply","done":120,"total":5000}`；开始 `{"event":"start","op":"apply"}`；结束 `{"event":"done","op":"apply","ok":true}`。
+每行一个 JSON：`{"event":"progress","op":"apply","done":120,"total":5000}`；开始 `{"event":"start","op":"apply"}`；结束 `{"event":"done","op":"apply","ok":true}`（运行失败时为 `ok:false`）。
 `progress` 至多每 50ms 或每 1% 发一次；对端关闭管道（EPIPE）时静默停止发送，命令照常完成。`fifo:`：不存在则 mkfifo，以非阻塞写打开，无读端则放弃（不阻塞命令）。`unix:`：connect 失败则放弃。`fd:`：直接 write。
 
 ## 命令
@@ -33,12 +33,13 @@
 - `conflicts [--mod NAME]`  data: `{"conflicts":[{"path","winner":"层名","losers":["层名"…]}],"count":N}`；`--mod` 只保留涉及该 mod 的条目。层名 = mod 名 / `<game>` / `<overwrite>`。
 - `plan`  只读。data: `{"ops":[{"kind":"mkdir|link|relink|remove|rmdir","path":"…","target":"…"}],"count":N,"counts":{"mkdir":n,"link":n,"relink":n,"remove":n,"rmdir":n},"warnings":N}`
 - `status`  只读。data: `{"in_sync":bool,"pending":N,"farm_path":"…","farm_exists":bool}`；`in_sync:false` 时退出码 3。
-- `apply`  构建期望树并物化农场；data: `{"applied":N,"changed":bool,"farm_path":"…"}`。发 `--events`。
+- `apply`  构建期望树并物化农场（空树首次创建 marker 时也返回 `changed:true`）；data: `{"applied":N,"changed":bool,"farm_path":"…"}`。发 `--events`。
 - `unlink`  删除农场（`remove_farm`）；data: `{"removed":bool,"farm_path":"…"}`；农场不存在 → `removed:false`（幂等，不是错误）。
+- `game info`  只读；从实例配置加载 `GameHost`（`MOL_GAME_LIB` 可指定库）。data 为游戏层原始信息对象：`{name,shortName,steamAppId,binaryName,launcherName,nexusGameId,gameDirectory,dataDirectory,documentsDirectory,savesDirectory,installed,looksValid,version,primaryPlugins,dlcPlugins,ccPlugins,iniFiles,variants,executables,scriptExtender}`。`executables` 是 `{title,binary,arguments,workingDirectory}` 数组，`scriptExtender` 是 `{name,loader,loaderPath,installed,version,savegameExtension}` 对象（游戏层可用时出现）。库缺失/加载失败/信息无效 → `game_unavailable`，退出 1；不初始化 profile、不启动游戏。
 - `version`  data: `{"name":"mo-linux","version":"0.0.1"}`
-后续（不在本批）：`game info`、`plugins sync`、`run`、`doctor`。
+后续：`plugins sync`、`run`、`doctor`。
 
 ## 约定
-- 所有路径输出为绝对 Unix 路径，UTF-8。
+- 实例与游戏目录输出为绝对 Unix 路径，UTF-8；`plan.ops[].path` 与冲突 `path` 为相对农场根的路径，`plan.ops[].target` 为绝对源路径（无目标时为空）。
 - 变更命令在 `--json` 与文本模式下的行为一致，仅输出格式不同。
 - 文本模式：一行摘要 + 必要的列表，面向人；不保证稳定，GUI 不得解析。
