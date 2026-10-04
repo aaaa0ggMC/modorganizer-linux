@@ -47,7 +47,7 @@
 
 **Wabbajack 真实大列表实测（A Dragonborn's Fate：124 个压缩包、16461 条指令、5.6GB，Premium key）**：约 20 分钟下完并装好——118/124 个压缩包完成、15446+ 个文件写出且逐个 hash 校验通过；产出的实例被 mo-linux 直接读懂（130 个 mod、113 个启用、76 个插件无 master 问题、`plan` 15220 个操作、0 个合并警告）。剩下 6 个未完成：2 个 Nexus 已 404（作者撤下的旧文件，含清单里自带的 MO2 本体）→ `manual_download` pending；4 个来自游戏目录的 esm（Dawnguard/HearthFires/Dragonborn/Update）hash 与清单不符——清单是按另一个游戏版本打的补丁，**这是真实的版本不匹配，不是 bug**。实测中发现并修复：①`ArchiveHashPath` 只有一项（源文件就是下载文件本身）时被误判为畸形指令；②`instance` 的 profile 应取清单自带 `selected_profile`。
 
-**Wabbajack 的现实边界**：实现了 FromArchive（含嵌套、含 BSA 作来源）/PatchedFromArchive(OctoDiff)/InlineFile/RemappedInlineFile/CreateBSA。**没实现** `TransformedTexture`（贴图重编码）与 MergedPatch，会作为 `unsupported` 报告，列表因此是 partial。
+**Wabbajack 的现实边界**：实现了 FromArchive（含嵌套、含 BSA 作来源）/PatchedFromArchive(OctoDiff)/InlineFile/RemappedInlineFile/CreateBSA/MergedPatch/TransformedTexture。清单里出现未知指令类型才会作为 `unsupported` 报告。**TransformedTexture 是近似实现**（`core/src/dds.cpp`：BC1–BC5/BC7/RGBA8 解码，BC1–BC5 的包围盒编码，BC7 只用 mode 6，面积平均缩放+box mip）：BC7 解码器对 Pillow 参考实现在 8 个模式的随机块上**逐位一致**（分区/锚点表就是用 Pillow 反推出来的，并与独立记忆的锚点表交叉核对）；编码结果经 Pillow 解码后 PSNR 与我们自己解码一致（BC1/3 约 38 dB，BC7 约 45 dB）。MergedPatch 与 CreateBSA 的真实列表端到端只验证了 CreateBSA；MergedPatch、TransformedTexture 只有合成测试（真实列表里 TransformedTexture 的来源包是几十 GB 的 HPNPO，没跑）。
 
 **数据驱动的取舍**：对画廊里 12 个体积最小的 SSE 列表跑 `inspect`——7 个 full、4 个仅缺 CreateBSA（每个 1–17 条）、1 个缺 CreateBSA+154 条 TransformedTexture。所以补了 CreateBSA（BSA 读写，`core/src/bsa.cpp`），TransformedTexture 暂缓（影响面小、要 DDS 编码器）。**BSA 写出器用游戏自带的 4 个真实 BSA 验证过**：哈希函数与每条记录一致，重建结果与原文件逐字节相同（唯一差异是官方工具在文件夹记录 padding 里留的未初始化垃圾字节）；LZ4 压缩路径只有往返测试，没有字节级标准答案。用真实列表 ASSOS 里的一条 CreateBSA（ccBGSSSE037-Curios，218 个文件，其中 66 个 OctoDiff 补丁）做了端到端：152 个 FromArchive + 66 个补丁全部与清单 hash 吻合、BSA 构建成功（与作者构建仅 padding/哈希字节差异，记为 note）。`inspect` 的 `verdict` 能在下载前告诉你。`gamefile` 来源（直接取游戏目录里的文件）要求游戏版本与清单一致，否则 hash 不符。
 
@@ -252,6 +252,7 @@ Claude 阶段的提交带 `Co-Authored-By` 与 `Claude-Session`；接续提交�
 | R15 | FOMOD 只在合成包上测过；与 MO2 的差异：忽略 alwaysInstall/installIfUsable（与 MO2 一致）、`moduleDependencies` 不检查；图片不提取 | 中 |
 | R16 | Nexus 个人 key 仅限个人/测试；公开发布需向 Nexus 注册应用拿 SSO slug（官方流程见 §0.1）。API 限流（日/时额度）已映射为 `nexus_rate_limited` 但未做退避重试 | 中 |
 | R19 | CreateBSA 的清单 Hash 与我们重建的 BSA 不一致（作者打包器的 padding/压缩编码差异）只提示不失败；若某个游戏版本对 padding 字节敏感则会暴露——目前所有真实 BSA 的 padding 都是垃圾值，游戏照常加载 | 低 |
+| R20 | TransformedTexture 的编码质量/mip 滤波与 DirectXTex 不同：BC7 只用 mode 6（单子集）、没有感知误差优化；法线图（BC5/BC7 法线）不做重归一化，色彩空间（sRGB）不做线性空间缩放。视觉上应无明显差异，但极端高频贴图可能略逊 | 低 |
 | R18 | Wabbajack 安装对每个压缩包是「完整解压到临时目录再复制」，大压缩包会短时占双倍磁盘；Nexus 来源按文件名/大小+xxh64 匹配本地缓存，免费账号全部变 pending；清单里的 Nexus `GameName` 直接小写当域名 | 低 |
 | R17 | `skse install` 依赖 Nexus 主文件标记与 SKSE 的 dll 命名规则（`skse64_<a>_<b>_<c>.dll`）；官方改规则时要跟 | 低 |
 | R12 | **alib6 的 4 处修改未提交**，且第 3 点是行为变更；若作者在别处使用了"同时声明破折号别名与 name，并依赖裸 name 匹配"的写法会受影响 | 中 |

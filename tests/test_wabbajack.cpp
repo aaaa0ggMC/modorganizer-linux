@@ -7,6 +7,7 @@
 #include "minitest.hpp"
 #include "mock_http.hpp"
 #include "mol/bsa.hpp"
+#include "mol/dds.hpp"
 #include "mol/wabbajack.hpp"
 #include "mol/wabbajack_install.hpp"
 #include "mol/xxh64.hpp"
@@ -76,7 +77,7 @@ TEST(parse_modlist_sources_and_directives) {
  "Directives":[
   {"$type":"FromArchive","ArchiveHashPath":["h1","dir\\f.txt"],"To":"mods\\M\\f.txt","Hash":"x","Size":3},
   {"$type":"InlineFile","SourceDataID":"g1","To":"a.txt","Hash":"y","Size":1},
-  {"$type":"MergedPatch","To":"mods\\M\\x.bsa"}]})";
+  {"$type":"SomeFutureDirective","To":"mods\\M\\x.bsa"}]})";
     const Modlist m = parse_modlist(json);
     CHECK_EQ(m.name, std::string("L"));
     CHECK_EQ(m.archives.size(), std::size_t{4});
@@ -139,8 +140,8 @@ TEST(install_modlist_end_to_end_with_resume_and_pending) {
   {"$type":"InlineFile","SourceDataID":"inline1","To":"readme.txt","Hash":")" + H("INLINE") + R"(","Size":6},
   {"$type":"RemappedInlineFile","SourceDataID":"remap1","To":"ModOrganizer.ini","Hash":"x","Size":1},
   {"$type":"FromArchive","ArchiveHashPath":["AAAAAAAAAAA=","x.txt"],"To":"mods\\N\\x.txt","Hash":"x","Size":1},
-  {"$type":"TransformedTexture","To":"mods\\M\\x.dds"},
-  {"$type":"TransformedTexture","To":"mods\\M\\y.dds"}]})";
+  {"$type":"SomeFutureDirective","To":"mods\\M\\x.dds"},
+  {"$type":"SomeFutureDirective","To":"mods\\M\\y.dds"}]})";
     // modlist 里的 @URL@ 在启动 mock 之后替换
     std::atomic<int> hits{0};
     Mock srv([&](const Req& r) -> Resp {
@@ -267,4 +268,61 @@ TEST(create_bsa_from_loose_files_and_extract_from_a_bsa_source) {
     // 重跑：幂等
     const Report r2 = install_modlist(ml, (t.dir / "t.wabbajack").string(), opt);
     CHECK(r2.complete());
+}
+
+TEST(transformed_texture_resizes_and_reencodes) {
+    if (!have_tools()) return;
+    Tmp t;
+    dds::Image src;
+    src.w = 64; src.h = 64; src.rgba.resize(64 * 64 * 4);
+    for (int i = 0; i < 64 * 64; ++i) { src.rgba[static_cast<std::size_t>(i) * 4] = static_cast<std::uint8_t>(i % 64 * 4); src.rgba[static_cast<std::size_t>(i) * 4 + 1] = static_cast<std::uint8_t>(i / 64 * 4); src.rgba[static_cast<std::size_t>(i) * 4 + 2] = 90; src.rgba[static_cast<std::size_t>(i) * 4 + 3] = 255; }
+    put(t.dir / "src/pack/textures/a.dds", dds::encode(src, dds::Format::BC1, 1));
+    (void)!std::system(("cd '" + (t.dir / "src/pack").string() + "' && zip -qr '" + (t.dir / "pack.zip").string() + "' . >/dev/null 2>&1").c_str());
+    const std::string h = wj_file_hash((t.dir / "pack.zip").string());
+    Mock srv([&](const Req& r) -> Resp { return r.target == "/pack.zip" ? Resp{200, slurp(t.dir / "pack.zip"), ""} : Resp{404, "", ""}; });
+    const std::string json = std::string(R"({"Name":"T","GameType":"SkyrimSpecialEdition","Archives":[{"Hash":")") + h + R"(","Name":"pack.zip","Size":)" + std::to_string(fs::file_size(t.dir / "pack.zip")) +
+        R"(,"State":{"$type":"HttpDownloader, Wabbajack.Lib","Url":")" + srv.base() + R"(/pack.zip"}}],"Directives":[
+        {"$type":"TransformedTexture","ArchiveHashPath":[")" + h + R"(","textures\\a.dds"],"To":"mods\\M\\textures\\a.dds","Hash":"x","Size":1,
+         "ImageState":{"Width":32,"Height":32,"Format":"BC7_UNORM","MipLevels":1}}]})";
+    put(t.dir / "wj/modlist", json);
+    (void)!std::system(("cd '" + (t.dir / "wj").string() + "' && zip -qr '" + (t.dir / "t.wabbajack").string() + "' . >/dev/null 2>&1").c_str());
+    InstallOptions opt;
+    opt.output_dir = (t.dir / "out").string();
+    const Report r = install_modlist(parse_modlist(json), (t.dir / "t.wabbajack").string(), opt);
+    CHECK(r.complete());
+    CHECK(!r.notes.empty());  // 说明纹理是近似重编码
+    const dds::Image out = dds::decode(slurp(t.dir / "out/mods/M/textures/a.dds"));
+    CHECK_EQ(out.w, 32);
+    CHECK_EQ(out.h, 32);
+    const std::string raw = slurp(t.dir / "out/mods/M/textures/a.dds");
+    CHECK(raw.compare(84, 4, "DX10") == 0);  // BC7 → DX10 头
+    // 左上角像素大致保持渐变起点（红≈0、绿≈0）
+    CHECK(out.rgba[0] < 40);
+    CHECK(out.rgba[1] < 40);
+}
+
+TEST(merged_patch_concatenates_installed_files_then_patches) {
+    if (!have_tools()) return;
+    Tmp t;
+    const std::string patched = "AAAABBBBxyz";
+    put(t.dir / "wj/in1", "AAAA");
+    put(t.dir / "wj/in2", "BBBB");
+    put(t.dir / "wj/pm", octo({{'c', "0,8"}, {'d', "xyz"}}));
+    const std::string json = std::string(R"({"Name":"T","GameType":"SkyrimSpecialEdition","Archives":[],"Directives":[
+        {"$type":"InlineFile","SourceDataID":"in1","To":"mods\\X\\one.txt","Hash":")") + H("AAAA") + R"(","Size":4},
+        {"$type":"InlineFile","SourceDataID":"in2","To":"mods\\X\\two.txt","Hash":")" + H("BBBB") + R"(","Size":4},
+        {"$type":"MergedPatch","PatchID":"pm","To":"mods\\Merged\\m.txt","Hash":")" + H(patched) + R"(","Size":11,
+         "Sources":[{"RelativePath":"mods\\X\\one.txt","Hash":"x"},{"RelativePath":"mods\\X\\two.txt","Hash":"y"}]}]})";
+    put(t.dir / "wj/modlist", json);
+    (void)!std::system(("cd '" + (t.dir / "wj").string() + "' && zip -qr '" + (t.dir / "t.wabbajack").string() + "' . >/dev/null 2>&1").c_str());
+    InstallOptions opt;
+    opt.output_dir = (t.dir / "out").string();
+    const Modlist ml = parse_modlist(json);
+    CHECK(ml.directives[2].kind == Kind::MergedPatch);
+    CHECK_EQ(ml.directives[2].merge_sources.size(), std::size_t{2});
+    const Report r = install_modlist(ml, (t.dir / "t.wabbajack").string(), opt);
+    CHECK(r.complete());
+    CHECK_EQ(slurp(t.dir / "out/mods/Merged/m.txt"), patched);
+    // 幂等
+    CHECK(install_modlist(ml, (t.dir / "t.wabbajack").string(), opt).complete());
 }

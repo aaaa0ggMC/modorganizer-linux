@@ -9,8 +9,8 @@
 //   InlineFile             清单自带的数据（SourceDataID）原样写出
 //   RemappedInlineFile     同上，但写出前把路径占位符替换成本机路径
 //   CreateBSA              用其它指令产出（落在 TEMP_BSA_FILES\\<TempID>\\…）的文件按原作者的标志重新打包 BSA（SSE v104/105，见 bsa.hpp）
-//   TransformedTexture     重编码贴图（尚未支持）
-//   MergedPatch / 其它      尚未支持
+//   MergedPatch            把若干已落地的文件拼接后打补丁（OctoDiff）
+//   TransformedTexture     重编码/缩放 DDS 贴图（见 dds.hpp；近似实现，输出与作者构建的字节不同）
 // 路径用反斜杠、大小写不敏感。
 #include <cstdint>
 #include <functional>
@@ -48,6 +48,15 @@ struct BsaFileState {
     bool flip = false;
 };
 
+struct MergeSource {
+    std::string relative_path, hash;
+};
+
+struct ImageState {
+    std::int64_t width = 0, height = 0, mips = 0;
+    std::string format;  // DXGI 名，如 "BC7_UNORM"
+};
+
 struct Directive {
     std::string type;  // $type 原文
     Kind kind = Kind::Other;
@@ -58,6 +67,10 @@ struct Directive {
     std::string temp_id;
     std::uint32_t bsa_version = 105, bsa_flags = 0, bsa_file_flags = 0;
     std::vector<BsaFileState> bsa_files;
+    // MergedPatch：把这些（已落地的）文件依次拼接作为基础文件，再打 PatchID 补丁
+    std::vector<MergeSource> merge_sources;
+    // TransformedTexture
+    ImageState image;
 };
 
 struct Modlist {

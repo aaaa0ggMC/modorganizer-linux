@@ -169,7 +169,7 @@ std::string gunzip(std::string_view in) {
 
 }  // namespace
 
-bool supported(Kind k) { return k == Kind::FromArchive || k == Kind::PatchedFromArchive || k == Kind::InlineFile || k == Kind::RemappedInlineFile || k == Kind::CreateBSA || k == Kind::Ignored; }
+bool supported(Kind k) { return k == Kind::FromArchive || k == Kind::PatchedFromArchive || k == Kind::InlineFile || k == Kind::RemappedInlineFile || k == Kind::CreateBSA || k == Kind::MergedPatch || k == Kind::TransformedTexture || k == Kind::Ignored; }
 
 const char* kind_name(Kind k) {
     switch (k) {
@@ -237,6 +237,19 @@ Modlist parse_modlist(std::string_view json) {
             }
             if (const auto* fs_ = sub(d, "FileStates"); fs_ && fs_->is_array())
                 for (const auto& f : fs_->array()) x.bsa_files.push_back({S(f, "Path"), B(f, "FlipCompression")});
+        }
+        if (x.kind == Kind::MergedPatch) {
+            x.patch_id = S(d, "PatchID");
+            if (const auto* src = sub(d, "Sources"); src && src->is_array())
+                for (const auto& e : src->array()) x.merge_sources.push_back({S(e, "RelativePath"), S(e, "Hash")});
+        }
+        if (x.kind == Kind::TransformedTexture) {
+            if (const auto* im = sub(d, "ImageState")) {
+                x.image.width = I(*im, "Width");
+                x.image.height = I(*im, "Height");
+                x.image.mips = I(*im, "MipLevels");
+                x.image.format = S(*im, "Format");
+            }
         }
         m.directives.push_back(std::move(x));
     }

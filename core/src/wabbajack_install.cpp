@@ -15,6 +15,7 @@
 
 #include "mol/bsa.hpp"
 #include "mol/casefold.hpp"
+#include "mol/dds.hpp"
 #include "mol/http.hpp"
 #include "mol/mod_install.hpp"
 #include "mol/parallel.hpp"
@@ -228,7 +229,8 @@ Report install_modlist(const Modlist& list, const std::string& wj_file, const In
     // ---- 1. 内联文件 ----
     std::map<std::string, std::vector<const Directive*>> by_archive;
     std::map<std::string, std::int64_t> unsupported;
-    std::vector<const Directive*> bsas;
+    std::vector<const Directive*> bsas, merges;
+    std::int64_t transformed = 0;
     for (const auto& d : list.directives) {
         try {
             if (d.kind == Kind::InlineFile || d.kind == Kind::RemappedInlineFile) {
@@ -240,9 +242,11 @@ Report install_modlist(const Modlist& list, const std::string& wj_file, const In
                 if (d.kind == Kind::RemappedInlineFile) content = remap_placeholders(content, opt.game_dir, out.string(), dl.string());
                 write_out(d.to, content);
                 ++rep.files_written;
-            } else if (d.kind == Kind::FromArchive || d.kind == Kind::PatchedFromArchive) {
+            } else if (d.kind == Kind::FromArchive || d.kind == Kind::PatchedFromArchive || d.kind == Kind::TransformedTexture) {
                 if (d.archive_path.empty()) { rep.failures.push_back("malformed directive for " + d.to); ++rep.files_failed; continue; }
                 by_archive[d.archive_path[0]].push_back(&d);
+            } else if (d.kind == Kind::MergedPatch) {
+                merges.push_back(&d);
             } else if (d.kind == Kind::CreateBSA) {
                 bsas.push_back(&d);
             } else if (d.kind != Kind::Ignored) {
@@ -415,6 +419,21 @@ Report install_modlist(const Modlist& list, const std::string& wj_file, const In
                     continue;
                 }
                 fs::create_directories(dest.parent_path(), ec);
+                if (d->kind == Kind::TransformedTexture) {
+                    // 缩放/重编码贴图：与作者用 DirectXTex 的结果字节不同（近似实现），所以不校验 hash，只确认能解码、能写出
+                    std::ifstream in(src, std::ios::binary);
+                    const std::string bytes((std::istreambuf_iterator<char>(in)), std::istreambuf_iterator<char>());
+                    dds::Image img = dds::decode(bytes);
+                    if (d->image.width > 0 && d->image.height > 0) img = dds::resize(img, static_cast<int>(d->image.width), static_cast<int>(d->image.height));
+                    const std::string enc = dds::encode(img, dds::format_from_name(d->image.format), static_cast<int>(d->image.mips));
+                    std::ofstream os(dest, std::ios::binary | std::ios::trunc);
+                    os.write(enc.data(), static_cast<std::streamsize>(enc.size()));
+                    if (!os) throw Error("io_error", "write failed", dest.string());
+                    ++rep.files_written;
+                    ++transformed;
+                    for (const auto& n : nested_tmps) fs::remove_all(n, ec);
+                    continue;
+                }
                 if (d->kind == Kind::PatchedFromArchive) {
                     const fs::path patch = data / d->patch_id;
                     if (!fs::exists(patch, ec)) throw Error("not_found", "missing patch data for " + d->to);
@@ -441,6 +460,40 @@ Report install_modlist(const Modlist& list, const std::string& wj_file, const In
         if (all_ok) { st.done.insert(hash); ++rep.archives_done; }
         save_state(work / "state.json", st);
     }
+    // ---- 2.5 MergedPatch：把已落地的若干文件依次拼接作为基础，再打 OctoDiff 补丁 ----
+    for (const Directive* d : merges) {
+        try {
+            const fs::path dest = out / safe_rel(d->to);
+            if (fs::exists(dest, ec) && !d->hash.empty() && wj_file_hash(dest.string()) == d->hash) continue;
+            const fs::path patch = data / d->patch_id;
+            if (!fs::exists(patch, ec)) throw Error("not_found", "missing patch data for " + d->to);
+            const fs::path basis = work / ("merge-basis-" + safe_name(d->to));
+            fs::create_directories(basis.parent_path(), ec);
+            {
+                std::ofstream bo(basis, std::ios::binary | std::ios::trunc);
+                for (const auto& srcp : d->merge_sources) {
+                    const fs::path sp = out / safe_rel(srcp.relative_path);
+                    std::ifstream in(sp, std::ios::binary);
+                    if (!in) throw Error("not_found", "merge source is missing: " + srcp.relative_path);
+                    bo << in.rdbuf();
+                }
+            }
+            fs::create_directories(dest.parent_path(), ec);
+            octodiff_apply(basis.string(), patch.string(), dest.string());
+            fs::remove(basis, ec);
+            if (!d->hash.empty() && wj_file_hash(dest.string()) != d->hash) {
+                rep.failures.push_back(d->to + ": hash mismatch after applying the merged patch");
+                ++rep.files_failed;
+                continue;
+            }
+            ++rep.files_written;
+        } catch (const Error& e) {
+            rep.failures.push_back(d->to + ": " + e.what());
+            ++rep.files_failed;
+        }
+    }
+    if (transformed > 0) rep.notes.push_back(std::to_string(transformed) + " texture(s) were resized/re-encoded with mo-linux's own encoder (visually equivalent, not byte-identical to the author's build)");
+
     // ---- 3. CreateBSA：所有散文件都落地之后，按原作者的标志重新打包 ----
     for (const Directive* d : bsas) {
         try {
