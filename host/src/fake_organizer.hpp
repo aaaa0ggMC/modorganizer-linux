@@ -91,6 +91,9 @@ public:
     PluginList& plugins() { return plugins_; }
     // 运行 onAboutToRun 回调（游戏插件在此准备 ini）。
     bool runAboutToRun(const QString& binary);
+    // 更新 profile/实例路径；空字符串表示保持不变。
+    void setProfile(const QString& name, const QString& profilePath, const QString& modsPath,
+                    const QString& overwritePath, const QString& basePath);
 
     // --- IOrganizer ---
     MOBase::IModRepositoryBridge* createNexusBridge() const override { return nullptr; }

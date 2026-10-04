@@ -23,6 +23,24 @@ void mo_game_destroy(mo_game* g);
 /* 游戏静态/派生信息（目录、可执行文件、基础插件、ini 文件、SKSE 信息……）。 */
 char* mo_game_info_json(mo_game* g);
 
+/* 设置当前 profile 与实例路径（上游游戏层通过 IOrganizer 读取 profilePath/modsPath 等）。
+ * 任一路径可为 NULL（保持不变）。成功返回 0。 */
+int mo_game_set_profile(mo_game* g, const char* name, const char* profile_dir, const char* mods_dir,
+                        const char* overwrite_dir, const char* base_dir);
+
+/* 上游游戏层的文件映射（MO2 用 usvfs 虚拟化的文件，例如 profile 的 plugins.txt/loadorder.txt →
+ * 游戏 AppData）。返回 JSON 数组：[{"source","destination","isDirectory","createTarget"}]。
+ * 需先 mo_game_set_profile。 */
+char* mo_game_mappings_json(mo_game* g);
+
+/* 初始化 profile 目录（复制游戏已有的 plugins.txt / ini 等）。
+ * flags: 1=MODS 2=CONFIGURATION 4=SAVEGAMES 8=PREFER_DEFAULTS。成功返回 0，失败返回非 0 并写 err。 */
+int mo_game_initialize_profile(mo_game* g, const char* dir, unsigned flags, char** err);
+
+/* 触发游戏插件注册的 onAboutToRun 回调（如 prepareIni：写 bEnableFileSelection）。
+ * 全部回调返回 true 则返回 0。 */
+int mo_game_about_to_run(mo_game* g, const char* binary);
+
 void mo_free(char* p);
 
 #ifdef __cplusplus

@@ -120,6 +120,8 @@ mo-linux (CLI, GCC, C++26, alib6)            ← cli/
 
 ## 7.5 实测发现
 
+- **`SHFileOperationW` 必须支持 `FO_COPY/FO_MOVE/FO_RENAME`**：上游 `copyToProfile` 经 `shellCopy` 走它，我们最初只实现了 `FO_DELETE`，复制失败后上游**静默创建空文件**（`initializeProfile` 得到 0 字节的 plugins.txt/ini）。已补齐并加 5 组测试；教训：shim 里"未实现"的函数，上游可能把失败吞掉而不是报错，今后新增 shim 功能要重点审视"失败是否会被静默吞掉"。
+
 - **include 顺序陷阱的真实后果**：uibase 自己的 TU 若用 `-I include/uibase`，`pch.h` 里 `<string.h>` 在 `extern "C"` 块内 `#include <strings.h>` 会截获 uibase 的 `strings.h`，导致 `MOBase::ireplace_all/iequals` 被编成 **C 链接**，使用方 `dlopen` 时 `undefined symbol`。已改为对 uibase 自身与消费者统一 `-idirafter`，并用 `-iquote` 保证其自身 `"strings.h"` 解析正确（`host/CMakeLists.txt`）。
 - **本机 Skyrim 状态**：`SkyrimSE.exe` 为 1.7.104.0（文件日期 9 月 9 日），目录里的 SKSE 是 `skse64_1_6_1170.dll`（loader 0.2.2.6）→ **版本不匹配，SKSE 多半无法加载**。属于 `doctor` 应报告的典型问题；先用无 SKSE 的 `SkyrimSE.exe` 验证启动。
 
@@ -172,7 +174,8 @@ ctest --test-dir build --output-on-failure
 | R6 | GPL-3.0：复用 MO2 代码意味着本项目须以 GPL-3.0 发布，**尚未添加 LICENSE** | 中 |
 | R7 | `mo2fmt` 缺 Ini/loadorder writer（nlohmann 已从 core 移除，**已解决**） | 低 |
 | R8 | `write_modlist` 丢 `*` 行（见 §7-3） | 低 |
-| R9 | plugins.txt / ini / 存档与 Wine prefix 的同步（每 profile 隔离）**尚未设计落地** | 高（功能缺口） |
+| R9 | **plugins.txt / ini / 存档的 profile 同步**：设计已明确、部分已实现。上游 `mappings()`（profile 的 `plugins.txt`/`loadorder.txt` → 游戏 AppData）、`initializeProfile()`、`prepareIni()` 已通过 C ABI 暴露（`mo_game_mappings_json / mo_game_initialize_profile / mo_game_about_to_run`），并在假前缀上实测：`initializeProfile` 复制出正确内容，`prepareIni` 正确追加 `[Launcher] bEnableFileSelection=1` 且保留原有内容。**CLI 侧尚未接线**：把 `mappings()` 物化为符号链接（游戏写 plugins.txt 时写穿到 profile 文件，与 MO2/usvfs 语义一致）、每 profile 的 ini/存档隔离、overwrite 捕获 | 中 |
+| R10 | **Qt 文件访问不做大小写不敏感**的真实后果：游戏跑过后会生成 `Skyrim.ini`/`SkyrimPrefs.ini`（大写），上游 `initializeProfile` 用 Qt 判断 `skyrim.ini` 是否存在 → 判为不存在 → 回退到游戏默认 ini，忽略用户已有设置。缓解方案（任选其一，待做）：①host 在调用前建一个只含小写别名链接的影子 Documents 目录并临时覆盖 shim 的 Documents 路径（不碰用户前缀）；②core 自己实现这一步 ini 复制 | 中 |
 
 ## 12. 路线图（建议顺序）
 

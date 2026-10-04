@@ -444,7 +444,7 @@ TEST(sh_file_operation_delete) {
     {
         std::wstring list = double_nul_list({f1});
         SHFILEOPSTRUCTW fo{};
-        fo.wFunc = FO_MOVE;
+        fo.wFunc = 99;  // 未知功能码
         fo.pFrom = list.c_str();
         CHECK_EQ(SHFileOperationW(&fo), (int)120);
     }
@@ -790,3 +790,99 @@ TEST(date_format_current_time) {
 }
 
 }  // namespace
+
+// ---- SHFileOperationW：FO_COPY / FO_MOVE / FO_RENAME ---------------------------------
+
+static void put(const std::string& p, const char* data) {
+    std::filesystem::create_directories(std::filesystem::path(p).parent_path());
+    write_text(p, data);
+}
+
+static int shell_op(UINT func, const std::vector<std::string>& from, const std::vector<std::string>& to,
+                    WORD flags = 0) {
+    std::wstring f = double_nul_list(from);
+    std::wstring t = double_nul_list(to);
+    SHFILEOPSTRUCTW fo{};
+    fo.wFunc = func;
+    fo.pFrom = f.c_str();
+    fo.pTo = t.c_str();
+    fo.fFlags = flags;
+    return SHFileOperationW(&fo);
+}
+
+static std::string slurp(const std::string& p) {
+    FILE* f = std::fopen(p.c_str(), "rb");
+    if (!f) return "<missing>";
+    std::string out;
+    char buf[256];
+    size_t n;
+    while ((n = std::fread(buf, 1, sizeof buf, f)) > 0) out.append(buf, n);
+    std::fclose(f);
+    return out;
+}
+
+TEST(sh_copy_file_to_new_name_and_overwrite) {
+    TempDir t;
+    put(t.path + "/src/a.ini", "AAA");
+    CHECK_EQ(shell_op(FO_COPY, {t.path + "/src/a.ini"}, {t.path + "/dst/sub/b.ini"}), 0);  // 创建父目录
+    CHECK_EQ(slurp(t.path + "/dst/sub/b.ini"), std::string("AAA"));
+    put(t.path + "/src/a.ini", "NEW");
+    CHECK_EQ(shell_op(FO_COPY, {t.path + "/src/a.ini"}, {t.path + "/dst/sub/b.ini"}), 0);  // 覆盖
+    CHECK_EQ(slurp(t.path + "/dst/sub/b.ini"), std::string("NEW"));
+    CHECK(exists(t.path + "/src/a.ini"));  // 复制不删源
+}
+
+TEST(sh_copy_into_existing_directory_and_case_insensitive_source) {
+    TempDir t;
+    put(t.path + "/src/Skyrim_Default.ini", "DEF");
+    std::filesystem::create_directories(t.path + "/prof");
+    // 源名大小写不同；目标是已存在目录 → 放进目录里
+    CHECK_EQ(shell_op(FO_COPY, {t.path + "/src/skyrim_default.INI"}, {t.path + "/prof"}), 0);
+    CHECK_EQ(slurp(t.path + "/prof/Skyrim_Default.ini"), std::string("DEF"));
+}
+
+TEST(sh_copy_directory_recursive_and_wildcards) {
+    TempDir t;
+    put(t.path + "/d/x.txt", "x");
+    put(t.path + "/d/inner/y.txt", "y");
+    CHECK_EQ(shell_op(FO_COPY, {t.path + "/d"}, {t.path + "/copy"}), 0);  // 目标不存在 → 成为新目录
+    CHECK_EQ(slurp(t.path + "/copy/x.txt"), std::string("x"));
+    CHECK_EQ(slurp(t.path + "/copy/inner/y.txt"), std::string("y"));
+    put(t.path + "/w/a.esp", "1");
+    put(t.path + "/w/b.esp", "2");
+    put(t.path + "/w/c.txt", "3");
+    CHECK_EQ(shell_op(FO_COPY, {t.path + "/w/*.ESP"}, {t.path + "/out"}), 0);  // 通配符大小写不敏感，目标按目录处理
+    CHECK(exists(t.path + "/out/a.esp"));
+    CHECK(exists(t.path + "/out/b.esp"));
+    CHECK(!exists(t.path + "/out/c.txt"));
+    CHECK_EQ(shell_op(FO_COPY, {t.path + "/w/*.zzz"}, {t.path + "/out"}), (int)ERROR_FILE_NOT_FOUND);  // 无匹配
+}
+
+TEST(sh_copy_multi_dest_and_missing_source) {
+    TempDir t;
+    put(t.path + "/a", "A");
+    put(t.path + "/b", "B");
+    CHECK_EQ(shell_op(FO_COPY, {t.path + "/a", t.path + "/b"}, {t.path + "/a2", t.path + "/b2"}, FOF_MULTIDESTFILES), 0);
+    CHECK_EQ(slurp(t.path + "/a2"), std::string("A"));
+    CHECK_EQ(slurp(t.path + "/b2"), std::string("B"));
+    CHECK_EQ(shell_op(FO_COPY, {t.path + "/nope"}, {t.path + "/z"}), (int)ERROR_FILE_NOT_FOUND);
+    CHECK(!exists(t.path + "/z"));
+    CHECK_EQ(shell_op(FO_COPY, {t.path + "/a", t.path + "/b"}, {t.path + "/only1", t.path + "/only2", t.path + "/only3"}, FOF_MULTIDESTFILES),
+             (int)ERROR_INVALID_PARAMETER);
+}
+
+TEST(sh_move_and_rename) {
+    TempDir t;
+    put(t.path + "/m/a.txt", "A");
+    CHECK_EQ(shell_op(FO_MOVE, {t.path + "/m/a.txt"}, {t.path + "/moved/a.txt"}), 0);
+    CHECK(!exists(t.path + "/m/a.txt"));
+    CHECK_EQ(slurp(t.path + "/moved/a.txt"), std::string("A"));
+    CHECK_EQ(shell_op(FO_RENAME, {t.path + "/moved/a.txt"}, {t.path + "/moved/b.txt"}), 0);
+    CHECK(!exists(t.path + "/moved/a.txt"));
+    CHECK_EQ(slurp(t.path + "/moved/b.txt"), std::string("A"));
+    // 移动目录
+    put(t.path + "/dir/f", "F");
+    CHECK_EQ(shell_op(FO_MOVE, {t.path + "/dir"}, {t.path + "/dir2"}), 0);
+    CHECK(!exists(t.path + "/dir"));
+    CHECK_EQ(slurp(t.path + "/dir2/f"), std::string("F"));
+}

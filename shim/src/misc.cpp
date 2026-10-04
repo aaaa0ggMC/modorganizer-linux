@@ -8,6 +8,7 @@
 #include "knownfolders.h"
 #include "shlobj.h"
 
+#include <algorithm>
 #include <cerrno>
 #include <cstdio>
 #include <cstdlib>
@@ -604,8 +605,121 @@ int SHCreateDirectory(HWND, LPCWSTR path) {
     return static_cast<int>(mol_shim::errno_to_win(ec.value()));
 }
 
+// ---- SHFileOperationW：FO_COPY / FO_MOVE / FO_RENAME ---------------------------------
+// 上游 uibase 的 shellCopy/shellMove/shellRename 全部走这里（例如 initializeProfile 的 copyToProfile）。
+// 语义取 Windows 行为的无界面子集：覆盖已有文件、必要时创建父目录、目录递归、源的最后一个成分可含 * ?。
+namespace {
+
+std::vector<std::wstring> split_multi_nul(const wchar_t* p) {
+    std::vector<std::wstring> out;
+    while (p && *p) {
+        size_t len = std::wcslen(p);
+        out.emplace_back(p, len);
+        p += len + 1;
+    }
+    return out;
+}
+
+bool glob_match_ci(std::string_view pat, std::string_view name) {
+    auto lc = [](char c) { return (c >= 'A' && c <= 'Z') ? char(c + 32) : c; };
+    size_t p = 0, n = 0, star = std::string_view::npos, mark = 0;
+    while (n < name.size()) {
+        if (p < pat.size() && (pat[p] == '?' || lc(pat[p]) == lc(name[n]))) { ++p; ++n; }
+        else if (p < pat.size() && pat[p] == '*') { star = p++; mark = n; }
+        else if (star != std::string_view::npos) { p = star + 1; n = ++mark; }
+        else return false;
+    }
+    while (p < pat.size() && pat[p] == '*') ++p;
+    return p == pat.size();
+}
+
+// 展开一个源：含通配符则枚举父目录（字典序），否则原样。
+std::vector<std::filesystem::path> expand_source(const std::wstring& w) {
+    namespace fs = std::filesystem;
+    std::string unix = mol_shim::native_path(w.c_str());
+    fs::path p(unix);
+    std::string leaf = p.filename().string();
+    std::vector<fs::path> out;
+    if (leaf.find_first_of("*?") == std::string::npos) {
+        out.push_back(p);
+        return out;
+    }
+    std::error_code ec;
+    for (fs::directory_iterator it(p.parent_path(), ec), end; !ec && it != end; it.increment(ec))
+        if (glob_match_ci(leaf, it->path().filename().string())) out.push_back(it->path());
+    std::sort(out.begin(), out.end());
+    return out;
+}
+
+int transfer_one(const std::filesystem::path& src, const std::filesystem::path& dst, bool move) {
+    namespace fs = std::filesystem;
+    std::error_code ec;
+    fs::file_status st = fs::symlink_status(src, ec);
+    if (ec || !fs::exists(st)) return ERROR_FILE_NOT_FOUND;
+    if (!dst.parent_path().empty()) {
+        fs::create_directories(dst.parent_path(), ec);
+        if (ec) return static_cast<int>(mol_shim::errno_to_win(ec.value()));
+    }
+    if (move) {
+        fs::rename(src, dst, ec);
+        if (!ec) return 0;
+        if (ec != std::errc::cross_device_link && ec != std::errc::file_exists && ec != std::errc::directory_not_empty)
+            return static_cast<int>(mol_shim::errno_to_win(ec.value()));
+    }
+    if (fs::is_directory(st) && !fs::is_symlink(st)) {
+        fs::create_directories(dst, ec);
+        if (!ec)
+            fs::copy(src, dst, fs::copy_options::recursive | fs::copy_options::overwrite_existing |
+                                   fs::copy_options::copy_symlinks, ec);
+    } else if (fs::is_symlink(st)) {
+        fs::remove(dst, ec);
+        ec.clear();
+        fs::copy_symlink(src, dst, ec);
+    } else {
+        fs::copy_file(src, dst, fs::copy_options::overwrite_existing, ec);
+    }
+    if (ec) return static_cast<int>(mol_shim::errno_to_win(ec.value()));
+    if (move) {
+        fs::remove_all(src, ec);
+        if (ec) return static_cast<int>(mol_shim::errno_to_win(ec.value()));
+    }
+    return 0;
+}
+
+int shell_transfer(const SHFILEOPSTRUCTW* op) {
+    namespace fs = std::filesystem;
+    const bool move = op->wFunc == FO_MOVE || op->wFunc == FO_RENAME;
+    const auto froms = split_multi_nul(op->pFrom);
+    const auto tos = split_multi_nul(op->pTo);
+    if (froms.empty() || tos.empty()) return ERROR_INVALID_PARAMETER;
+    const bool multi = (op->fFlags & FOF_MULTIDESTFILES) != 0;
+    if (multi && tos.size() != froms.size()) return ERROR_INVALID_PARAMETER;
+
+    for (size_t i = 0; i < froms.size(); ++i) {
+        const auto sources = expand_source(froms[i]);
+        if (sources.empty()) return ERROR_FILE_NOT_FOUND;
+        const std::wstring& to_w = multi ? tos[i] : tos[0];
+        const fs::path to(mol_shim::native_path(to_w.c_str()));
+        std::error_code ec;
+        const bool to_is_dir = fs::is_directory(to, ec);
+        const bool to_trailing_slash = !to_w.empty() && (to_w.back() == L'\\' || to_w.back() == L'/');
+        // 目标是目录（已存在/以分隔符结尾/多个源）→ 放进目录；否则目标就是新名字。
+        const bool into_dir = !multi && (to_is_dir || to_trailing_slash || froms.size() > 1 || sources.size() > 1);
+        for (const auto& src : sources) {
+            fs::path dst = into_dir ? to / src.filename() : to;
+            if (op->wFunc == FO_RENAME && into_dir) dst = to;
+            int rc = transfer_one(src, dst, move);
+            if (rc != 0) return rc;
+        }
+    }
+    return 0;
+}
+
+}  // namespace
+
 int SHFileOperationW(SHFILEOPSTRUCTW* op) {
     if (!op) return ERROR_INVALID_PARAMETER;
+    if (op->wFunc == FO_COPY || op->wFunc == FO_MOVE || op->wFunc == FO_RENAME) return shell_transfer(op);
     if (op->wFunc != FO_DELETE) return kErrorCallNotImplemented;  // 只支持 FO_DELETE
     bool undo = (op->fFlags & FOF_ALLOWUNDO) != 0;
     if (op->pFrom) {

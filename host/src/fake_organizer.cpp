@@ -83,6 +83,16 @@ bool PluginList::hasLightExtension(const QString& n) const {
 Organizer::Organizer(OrganizerConfig cfg) : cfg_(std::move(cfg)) {
     profile_ = std::make_shared<Profile>(cfg_.profileName, cfg_.profilePath, cfg_.documentsDir);
 }
+void Organizer::setProfile(const QString& name, const QString& profilePath, const QString& modsPath,
+                           const QString& overwritePath, const QString& basePath) {
+    if (!name.isEmpty()) cfg_.profileName = name;
+    if (!profilePath.isEmpty()) cfg_.profilePath = profilePath;
+    if (!modsPath.isEmpty()) cfg_.modsPath = modsPath;
+    if (!overwritePath.isEmpty()) cfg_.overwritePath = overwritePath;
+    if (!basePath.isEmpty()) cfg_.basePath = basePath;
+    profile_ = std::make_shared<Profile>(cfg_.profileName, cfg_.profilePath, cfg_.documentsDir);
+}
+
 bool Organizer::runAboutToRun(const QString& binary) {
     bool ok = true;
     for (auto& f : aboutToRun_) ok = f(binary) && ok;

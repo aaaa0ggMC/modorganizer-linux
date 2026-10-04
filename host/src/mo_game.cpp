@@ -10,6 +10,7 @@
 #include <QJsonObject>
 
 #include <uibase/executableinfo.h>
+#include <uibase/ipluginfilemapper.h>
 #include <uibase/game_features/dataarchives.h>
 #include <uibase/game_features/scriptextender.h>
 #include <uibase/log.h>
@@ -141,6 +142,51 @@ char* mo_game_info_json(mo_game* g) {
         o["scriptExtender"] = s;
     }
     return dup_str(QString::fromUtf8(QJsonDocument(o).toJson(QJsonDocument::Compact)));
+}
+
+int mo_game_set_profile(mo_game* g, const char* name, const char* profile_dir, const char* mods_dir,
+                        const char* overwrite_dir, const char* base_dir) {
+    if (!g) return 1;
+    auto q = [](const char* s) { return s ? QString::fromUtf8(s) : QString(); };
+    g->organizer->setProfile(q(name), q(profile_dir), q(mods_dir), q(overwrite_dir), q(base_dir));
+    return 0;
+}
+
+char* mo_game_mappings_json(mo_game* g) {
+    if (!g) return nullptr;
+    QJsonArray arr;
+    if (auto* mapper = dynamic_cast<MOBase::IPluginFileMapper*>(g->game.get())) {
+        for (const auto& m : mapper->mappings()) {
+            QJsonObject o;
+            o["source"] = m.source;
+            o["destination"] = m.destination;
+            o["isDirectory"] = m.isDirectory;
+            o["createTarget"] = m.createTarget;
+            arr.append(o);
+        }
+    }
+    return dup_str(QString::fromUtf8(QJsonDocument(arr).toJson(QJsonDocument::Compact)));
+}
+
+int mo_game_initialize_profile(mo_game* g, const char* dir, unsigned flags, char** err) {
+    if (err) *err = nullptr;
+    if (!g || !dir) {
+        set_err(err, QStringLiteral("invalid argument"));
+        return 1;
+    }
+    try {
+        MOBase::IPluginGame& game = *g->game;
+        game.initializeProfile(QDir(QString::fromUtf8(dir)), MOBase::IPluginGame::ProfileSettings(flags));
+        return 0;
+    } catch (const std::exception& e) {
+        set_err(err, QString::fromUtf8(e.what()));
+        return 2;
+    }
+}
+
+int mo_game_about_to_run(mo_game* g, const char* binary) {
+    if (!g) return 1;
+    return g->organizer->runAboutToRun(QString::fromUtf8(binary ? binary : "")) ? 0 : 1;
 }
 
 void mo_free(char* p) { std::free(p); }
