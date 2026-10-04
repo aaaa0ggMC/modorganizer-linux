@@ -118,6 +118,11 @@ mo-linux (CLI, GCC, C++26, alib6)            ← cli/
 6. **注册表来自 Wine 的 `system.reg/user.reg`**（只读，WP5 实现）；前缀未配置时一律"键不存在"，所以游戏路径必须由实例配置显式给出，不能指望 `detectGame()`。
 7. **ImageNtHeader** 对未登记指针按 4KB 兜底做边界检查。
 
+## 7.5 实测发现
+
+- **include 顺序陷阱的真实后果**：uibase 自己的 TU 若用 `-I include/uibase`，`pch.h` 里 `<string.h>` 在 `extern "C"` 块内 `#include <strings.h>` 会截获 uibase 的 `strings.h`，导致 `MOBase::ireplace_all/iequals` 被编成 **C 链接**，使用方 `dlopen` 时 `undefined symbol`。已改为对 uibase 自身与消费者统一 `-idirafter`，并用 `-iquote` 保证其自身 `"strings.h"` 解析正确（`host/CMakeLists.txt`）。
+- **本机 Skyrim 状态**：`SkyrimSE.exe` 为 1.7.104.0（文件日期 9 月 9 日），目录里的 SKSE 是 `skse64_1_6_1170.dll`（loader 0.2.2.6）→ **版本不匹配，SKSE 多半无法加载**。属于 `doctor` 应报告的典型问题；先用无 SKSE 的 `SkyrimSE.exe` 验证启动。
+
 ## 8. 构建与运行
 
 依赖（Arch）：`cmake>=4.4 ninja gcc>=16 clang qt6-base qt6-declarative spdlog zlib lz4 nlohmann-json glm rapidjson tomlplusplus`；`~/Projs/aaaa0ggmcLib`（或 `-DMOL_ALIB6_DIR=`）；`third_party/uibase`、`third_party/game_bethesda` 需检出（目前是本地 clone，**尚未建 submodule/固定 commit**）。
@@ -156,7 +161,7 @@ ctest --test-dir build --output-on-failure
 
 | 项 | 说明 | 严重度 |
 |---|---|---|
-| R1 | **host 运行时未验证**：WP5 未到，`dlopen` 因缺 `RegGetValueW` 失败。真实的 `GameSkyrimSE::init/setGamePath/gameVersion` 路径可能还会暴露 shim 缺口 | 高 |
+| R1 | ~~host 运行时未验证~~ **已验证（部分）**：`libmo-game` 已能 `dlopen`，`GameSkyrimSE::init/setGamePath` 与全部信息查询在本机真实 Skyrim SE 目录上返回正确结果（目录、DLC、可执行文件、SKSE、ini 名、`gameVersion`=1.7.104.0，已用 `strings -e l SkyrimSE.exe` 独立核对）。**仍未验证**：`initializeProfile`、`GamePlugins::writePluginLists`、存档读取等会走更多 shim 路径的功能 | 中 |
 | R2 | **Proton 启动未实测**：`proton run` 在 Steam 之外的环境变量集合、pressure-vessel 能否解析指向农场外的符号链接（我用 `STEAM_COMPAT_MOUNTS`/`PRESSURE_VESSEL_FILESYSTEMS_RW` 兜底）均未实测 | 高 |
 | R3 | **符号链接在 Wine/容器内的行为**：农场里 exe 与 DLL 是链接；SKSE、`GetModuleFileName`、游戏对自身目录的探测是否正常，未验证 | 高 |
 | R4 | `third_party` 未固定 commit / 未建 submodule；uibase 补丁与版本绑定 | 中 |

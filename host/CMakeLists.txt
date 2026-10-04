@@ -60,12 +60,16 @@ qt_wrap_ui(UIBASE_UI_HDRS ${UIBASE_UI})
 file(GLOB_RECURSE UIBASE_HDR ${UIBASE_SRC}/include/uibase/*.h)
 add_library(uibase STATIC ${UIBASE_CPP} ${UIBASE_UI_HDRS} ${UIBASE_HDR}
             ${CMAKE_CURRENT_LIST_DIR}/overrides/uibase/registry.cpp)
-# uibase 的 include/uibase 目录里有 strings.h，会遮蔽 glibc 的 <strings.h>（<string.h> 内部会包含它）。
-# 上游 MSVC 没有这个冲突。对消费者（game_bethesda）用 -idirafter 让系统头优先；uibase 自己的 TU 保持 -I。
+# uibase 的 include/uibase 目录里有 strings.h，会遮蔽 glibc 的 <strings.h>（<string.h> 内部在 extern "C" 块里包含它）。
+# 后果：uibase 自己的 TU 若用 -I，MOBase::ireplace_all 会被截获并编成 C 链接（符号未修饰），
+# 而使用方（-idirafter）期望 C++ 链接 → 运行期 undefined symbol。
+# 所以对 uibase 本身和消费者都用 -idirafter（角括号），并用 -iquote 保证 uibase 自己的 "strings.h" 仍能解析到本地文件。
 target_include_directories(uibase PUBLIC ${CMAKE_CURRENT_BINARY_DIR} ${MOL_ROOT}/shim/include ${ALIAS_DIR} ${UIBASE_SRC}/include
-                                         PRIVATE ${UIBASE_SRC}/src ${UIBASE_SRC}/include/uibase ${UIBASE_SRC}/include/uibase/game_features)
-target_compile_options(uibase INTERFACE "SHELL:-idirafter ${UIBASE_SRC}/include/uibase"
-                                        "SHELL:-idirafter ${UIBASE_SRC}/include/uibase/game_features")
+                                         PRIVATE ${UIBASE_SRC}/src)
+target_compile_options(uibase PUBLIC "SHELL:-idirafter ${UIBASE_SRC}/include/uibase"
+                                     "SHELL:-idirafter ${UIBASE_SRC}/include/uibase/game_features"
+                                     PRIVATE "SHELL:-iquote ${UIBASE_SRC}/include/uibase"
+                                             "SHELL:-iquote ${UIBASE_SRC}/include/uibase/game_features")
 target_compile_definitions(uibase PUBLIC SPDLOG_USE_STD_FORMAT PRIVATE UIBASE_EXPORT MOL_SPDLOG_COMPAT)
 target_compile_options(uibase PRIVATE ${UP_FLAGS} "SHELL:-include pch.h")
 set_source_files_properties(${UIBASE_SRC}/src/pch.h PROPERTIES HEADER_FILE_ONLY ON)
