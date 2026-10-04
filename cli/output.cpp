@@ -129,6 +129,19 @@ std::pmr::vector<std::pmr::string> render_text(const Result& r, mol::mr* mem) {
         add(lines, "game " + S(r.data, "gameDirectory"), mem);
         add(lines, "data " + S(r.data, "dataDirectory"), mem);
         add(lines, "binary " + S(r.data, "binaryName"), mem);
+    } else if (cmd == "doctor") {
+        const auto& checks = r.data.object().find("checks").second().array();
+        for (const auto& c : checks) {
+            const auto& o = c.object();
+            const std::string lvl = S(c, "level");
+            std::string line = (lvl == "ok" ? "[ ok ] " : lvl == "warn" ? "[warn] " : "[FAIL] ") + S(c, "message");
+            const std::string hint = S(c, "hint");
+            if (!hint.empty()) line += "  -> " + hint;
+            (void)o;
+            add(lines, line, mem);
+        }
+        add(lines, std::to_string(adata::integer(r.data, "errors")) + " error(s), " +
+                       std::to_string(adata::integer(r.data, "warnings")) + " warning(s)", mem);
     } else if (cmd == "plugins sync") {
         add(lines, std::string("plugins sync ") + (adata::boolean(r.data, "changed") ? "(changed)" : "(unchanged)"), mem);
     } else if (cmd == "instance init") {

@@ -133,6 +133,19 @@ struct OverwritePromoteData {
     std::pmr::vector<PromoteRow> files;
 };
 
+// ---- doctor -----------------------------------------------------------------
+struct CheckRow {
+    std::pmr::string id;
+    std::pmr::string level;  // ok|warn|error
+    std::pmr::string message;
+    std::pmr::string hint;
+};
+struct DoctorData {
+    std::size_t errors = 0;
+    std::size_t warnings = 0;
+    std::pmr::vector<CheckRow> checks;
+};
+
 // ---- run --------------------------------------------------------------------
 struct RunData {
     std::pmr::string exe;

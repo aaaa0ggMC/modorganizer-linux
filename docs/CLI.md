@@ -47,7 +47,9 @@
 - `overwrite promote --filter GLOB[,GLOB…] [--yes]`  **破坏性**：把 `overwrite/` 里匹配的文件移进**真实游戏的 `Data/`**（让 Steam 直接启动也能看到，例如 Creations）。不带 `--yes` 只预览。`--filter` 必填（大小写不敏感，匹配相对 overwrite 的路径）；目标已存在则跳过，不覆盖游戏文件；目录名大小写沿用游戏目录里的写法；执行需要农场空闲，之后需 `apply`（会有 `farm_stale` 警告）。data：`{executed,moved,skipped,files:[{path,dest,skipped}]}`。
 - `apply`/`unlink`/`run`/`overwrite capture` 在有进程使用农场（命令行含农场路径或 cwd 在农场内，含 Wine 的反斜杠路径）时拒绝，错误码 `farm_busy`。
 
-后续：`doctor`。
+- `doctor`  只读体检。data：`{errors,warnings,checks:[{id,level,message,hint}]}`，level ∈ `ok|warn|error`。检查项：`game.dir/exe/data/version`、`skse.loader/version`（按游戏版本推出 `skse64_<a>_<b>_<c>.dll` 并检查存在）、`prefix`、`runner.proton/steam_root`、`profile`、`mods`/`mods.missing`、`farm`/`farm.warnings`/`farm.busy`、`plugins.link`。游戏版本来自游戏层；host 库缺失只降级为 warn。有 error 时退出码 3（ok 仍为 true）。
+
+后续：Nexus。
 
 ## 约定
 - 实例与游戏目录输出为绝对 Unix 路径，UTF-8；`plan.ops[].path` 与冲突 `path` 为相对农场根的路径，`plan.ops[].target` 为绝对源路径（无目标时为空）。
