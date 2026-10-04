@@ -47,7 +47,10 @@
 - `overwrite promote --filter GLOB[,GLOB…] [--yes]`  **破坏性**：把 `overwrite/` 里匹配的文件移进**真实游戏的 `Data/`**（让 Steam 直接启动也能看到，例如 Creations）。不带 `--yes` 只预览。`--filter` 必填（大小写不敏感，匹配相对 overwrite 的路径）；目标已存在则跳过，不覆盖游戏文件；目录名大小写沿用游戏目录里的写法；执行需要农场空闲，之后需 `apply`（会有 `farm_stale` 警告）。data：`{executed,moved,skipped,files:[{path,dest,skipped}]}`。
 - `apply`/`unlink`/`run`/`overwrite capture` 在有进程使用农场（命令行含农场路径或 cwd 在农场内，含 Wine 的反斜杠路径）时拒绝，错误码 `farm_busy`。
 
-- `doctor`  只读体检。data：`{errors,warnings,checks:[{id,level,message,hint}]}`，level ∈ `ok|warn|error`。检查项：`game.dir/exe/data/version`、`skse.loader/version`（按游戏版本推出 `skse64_<a>_<b>_<c>.dll` 并检查存在）、`prefix`、`runner.proton/steam_root`、`profile`、`mods`/`mods.missing`、`farm`/`farm.warnings`/`farm.busy`、`plugins.link`。游戏版本来自游戏层；host 库缺失只降级为 warn。有 error 时退出码 3（ok 仍为 true）。
+- `plugins list`  只读。当前 profile 的插件加载顺序：`{profile,changed:false,plugins:[{name,index,enabled,forced,master,light,source,masters:[…]}],issues:[{plugin,master,kind}]}`。可用插件 = 农场里 `Data/` 顶层的 `.esp/.esm/.esl`；`forced` = 游戏自带（Skyrim.esm、官方 DLC 等，永远启用、排最前）；`master` = ESM 标志或 `.esm`；`source` = 提供它的层；`masters` 来自文件头。`issues.kind` ∈ `missing`（master 不在磁盘上）｜`disabled`（master 被禁用）｜`after`（master 排在后面）。排序规则：强制 → ESM 标志 → 其它；列表里有而磁盘上没有的被丢弃，磁盘上有而列表里没有的追加并默认启用。
+- `plugins enable|disable NAME`、`plugins move NAME --to N`、`plugins sort`  修改并写回 profile 的 `plugins.txt`/`loadorder.txt`。data 同 `plugins list`，`changed` 表示是否真的改了顺序/状态。禁用强制插件 → `invalid_argument`；不存在 → `mod_not_found`。`move` 不能越过「强制/ESM」区的边界（会被规范化修正）。`sort` 只保证每个插件排在其 masters 之后，**不是 LOOT**。
+- `run` 启动前会先把插件列表规范化并写回 profile（新装 mod 的插件才会被游戏加载）。
+- `doctor`  只读体检。data：`{errors,warnings,checks:[{id,level,message,hint}]}`，level ∈ `ok|warn|error`。检查项：`game.dir/exe/data/version`、`skse.loader/version`（按游戏版本推出 `skse64_<a>_<b>_<c>.dll` 并检查存在）、`prefix`、`runner.proton/steam_root`、`profile`、`mods`/`mods.missing`、`farm`/`farm.warnings`/`farm.busy`、`plugins.masters`（缺失/被禁用的 master 为 error，顺序错误为 warn）、`plugins.link`。游戏版本来自游戏层；host 库缺失只降级为 warn。有 error 时退出码 3（ok 仍为 true）。
 
 - `nexus login [--key-file F]`  从文件或 stdin 读取 Nexus **个人 API key**，**先向 Nexus 验证、通过才保存**到 `~/.config/mo-linux/nexus.key`（0600）。环境变量 `NEXUS_API_KEY` 优先于文件。key 永不出现在输出/日志/错误信息里。data：`{name,user_id,is_premium,is_supporter,key_path}`。
 - `nexus logout`  删除保存的 key。data：`{removed}`。

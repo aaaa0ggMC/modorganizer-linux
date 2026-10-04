@@ -90,6 +90,9 @@ constexpr OptionSpec kOptModsInstall[] = {
 constexpr OptionSpec kOptFomodInspect[] = {
     {"choices", "", "--choices", "Partial/complete choices JSON; unspecified groups use defaults", true},
 };
+constexpr OptionSpec kOptPluginsMove[] = {
+    {"to", "", "--to", "Target load-order position (0 = first)", true},
+};
 constexpr OptionSpec kOptConflicts[] = {
     {"mod", "", "--mod", "Only conflicts involving this mod", true},
 };

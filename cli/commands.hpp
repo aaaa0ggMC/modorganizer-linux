@@ -10,6 +10,11 @@ namespace cli {
 Result run_version(Context&);
 Result run_game_info(Context&);
 Result run_plugins_sync(Context&);
+Result run_plugins_list(Context&);
+Result run_plugins_enable(Context&);
+Result run_plugins_disable(Context&);
+Result run_plugins_move(Context&);
+Result run_plugins_sort(Context&);
 Result run_run(Context&);
 Result run_fomod_inspect(Context&);
 Result run_skse_install(Context&);

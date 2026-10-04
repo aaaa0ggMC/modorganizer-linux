@@ -7,6 +7,7 @@
 #include "mol/casefold.hpp"
 #include "mol/mo2fmt.hpp"
 #include "mol/overwrite.hpp"
+#include "mol/plugins.hpp"
 
 namespace mol {
 namespace fs = std::filesystem;
@@ -151,6 +152,31 @@ vector<Check> run_doctor(const Instance& inst, std::string_view game_version, mr
             s.add("farm", "error", e.what(), e.code);
         }
         if (farm_in_use(inst)) s.add("farm.busy", "warn", "a process is using the farm (game running?)");
+    }
+
+    // 插件依赖（masters）
+    if (fs::is_directory(pdir, ec) && !inst.cfg.game_dir.empty() && fs::is_directory(game, ec)) {
+        try {
+            const PluginList pl = load_plugins(inst, {}, {}, mem);
+            const auto issues = check_masters(pl, mem);
+            if (issues.empty()) {
+                s.add("plugins.masters", "ok", std::to_string(pl.rows.size()) + " plugin(s), all masters satisfied");
+            } else {
+                for (const auto& is : issues) {
+                    const std::string k(is.kind);
+                    if (k == "missing")
+                        s.add("plugins.masters", "error", std::string(is.plugin) + " requires " + std::string(is.master) + ", which is not installed",
+                              "install the missing master or disable " + std::string(is.plugin));
+                    else if (k == "disabled")
+                        s.add("plugins.masters", "error", std::string(is.plugin) + " requires " + std::string(is.master) + ", which is disabled",
+                              "enable " + std::string(is.master));
+                    else
+                        s.add("plugins.masters", "warn", std::string(is.plugin) + " is loaded before its master " + std::string(is.master), "run `plugins sort`");
+                }
+            }
+        } catch (const Error& e) {
+            s.add("plugins.masters", "warn", std::string("could not check plugin masters: ") + e.what());
+        }
     }
 
     // plugins.txt 映射（只检查最常见的位置，不创建）

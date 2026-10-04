@@ -15,6 +15,7 @@
 #include <string>
 #include <string_view>
 #include <utility>
+#include <vector>
 
 #include "args.hpp"
 #include "events.hpp"
@@ -103,7 +104,11 @@ using CommandFn = Result (*)(Context&);
 Result make_ok(Context& ctx);                                            // data=空对象
 Result make_usage_error(std::string_view message, Context& ctx);
 // 游戏层 info 里的字符串字段（sub_key 非空则取其子对象里的字段）；host 缺失/字段缺失返回空串。
-std::string game_info_string(Context& ctx, const mol::Instance& inst, std::string_view key, std::string_view sub_key = {});          // invalid_argument/2
+std::string game_info_string(Context& ctx, const mol::Instance& inst, std::string_view key, std::string_view sub_key = {});
+// 游戏层 info 里的字符串数组字段；取不到返回空。
+std::vector<std::string> game_info_list(Context& ctx, const mol::Instance& inst, std::string_view key);
+// 游戏强制插件（primary + DLC + CC，去重、保序）；取不到为空（调用方用后备清单）。
+std::vector<std::string> forced_plugin_names(Context& ctx, const mol::Instance& inst);          // invalid_argument/2
 Result result_from_mol_error(const mol::Error& e, Context& ctx);
 Result result_from_std_exception(const std::exception& e, Context& ctx);  // 归一 io_error/1
 Result result_from_unknown_command(Context& ctx, std::string_view line);  // invalid_argument/2

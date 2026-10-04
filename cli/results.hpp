@@ -231,6 +231,28 @@ struct FomodInspectData {
     std::pmr::vector<FomodFileRow> files;  // 按当前选择（未给的组用默认）将安装的文件，已排序
 };
 
+struct PluginRowData {
+    std::pmr::string name;
+    std::size_t index = 0;
+    bool enabled = false;
+    bool forced = false;
+    bool master = false;
+    bool light = false;
+    std::pmr::string source;
+    std::pmr::vector<std::pmr::string> masters;
+};
+struct MasterIssueRow {
+    std::pmr::string plugin;
+    std::pmr::string master;
+    std::pmr::string kind;  // missing|disabled|after
+};
+struct PluginsListData {
+    std::pmr::string profile;
+    bool changed = false;  // 本次命令是否改动了 plugins.txt/loadorder.txt（list 恒为 false）
+    std::pmr::vector<PluginRowData> plugins;
+    std::pmr::vector<MasterIssueRow> issues;
+};
+
 // ---- run --------------------------------------------------------------------
 struct RunData {
     std::pmr::string exe;

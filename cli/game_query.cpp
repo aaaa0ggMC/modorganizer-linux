@@ -33,4 +33,32 @@ std::string game_info_string(Context& ctx, const mol::Instance& inst, std::strin
     }
 }
 
+std::vector<std::string> game_info_list(Context& ctx, const mol::Instance& inst, std::string_view key) {
+    std::vector<std::string> out;
+    try {
+        const auto host = mol::GameHost::open();
+        const auto game = host.create(inst.cfg.game, inst.cfg.game_dir, inst.cfg.prefix, inst.cfg.prefix_user);
+        alib6::AData info(ctx.mem);
+        if (!info.load_from_memory(game.info_json(ctx.mem)) || !info.is_object()) return out;
+        auto it = info.object().find(key);
+        if (it == info.object().end() || !it.second().is_array()) return out;
+        for (const auto& v : it.second().array())
+            if (auto s = v.try_to<std::string_view>()) out.emplace_back(*s);
+    } catch (const mol::Error&) {
+    }
+    return out;
+}
+
+std::vector<std::string> forced_plugin_names(Context& ctx, const mol::Instance& inst) {
+    std::vector<std::string> out;
+    auto lower = [](std::string s) { for (auto& c : s) c = static_cast<char>(std::tolower(static_cast<unsigned char>(c))); return s; };
+    for (const char* k : {"primaryPlugins", "dlcPlugins", "ccPlugins"})
+        for (auto& n : game_info_list(ctx, inst, k)) {
+            bool dup = false;
+            for (const auto& e : out) if (lower(e) == lower(n)) { dup = true; break; }
+            if (!dup) out.push_back(std::move(n));
+        }
+    return out;
+}
+
 }  // namespace cli

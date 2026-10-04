@@ -5,6 +5,7 @@
 #include "mol/game_host.hpp"
 #include "mol/instance.hpp"
 #include "mol/overwrite.hpp"
+#include "mol/plugins.hpp"
 #include "mol/plugins_sync.hpp"
 #include "mol/runner.hpp"
 
@@ -32,6 +33,11 @@ Result run_run(Context& ctx) {
     bool synced = false;
     if (!dry) {
         captured_before = mol::capture_overwrite(inst);
+        {  // 把新装 mod 带来的插件、规范化后的顺序固化进 profile，游戏才会加载它们
+            std::vector<mol::string> forced;
+            for (const auto& n : forced_plugin_names(ctx, inst)) forced.emplace_back(n, ctx.mem);
+            mol::save_plugins(inst, mol::load_plugins(inst, forced, ctx.profile_override(), ctx.mem), ctx.profile_override());
+        }
         mol::sync_plugins(inst, game, ctx.mem);
         synced = true;
     }
