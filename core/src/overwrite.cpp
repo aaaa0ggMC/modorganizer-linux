@@ -1,5 +1,6 @@
 #include "mol/overwrite.hpp"
 
+#include <fnmatch.h>
 #include <unistd.h>
 
 #include <algorithm>
@@ -67,6 +68,66 @@ std::size_t capture_overwrite(const Instance& inst) {
         }
     }
     return moved;
+}
+
+namespace {
+// 逐级大小写不敏感地解析：已有的目录/文件沿用磁盘上的写法，不存在的部分按原样。
+fs::path resolve_ci_under(const fs::path& base, const fs::path& rel) {
+    fs::path cur = base;
+    for (const auto& comp : rel) {
+        const auto want = casefold(comp.string());
+        fs::path pick = cur / comp;
+        std::error_code ec;
+        if (!fs::exists(fs::symlink_status(pick, ec))) {
+            for (fs::directory_iterator it(cur, ec), end; !ec && it != end; it.increment(ec)) {
+                if (casefold(it->path().filename().string()) == want) { pick = it->path(); break; }
+            }
+        }
+        cur = pick;
+    }
+    return cur;
+}
+}  // namespace
+
+vector<PromoteEntry> promote_overwrite(const Instance& inst, std::span<const std::string> filters, bool execute, mr* mem) {
+    vector<PromoteEntry> out(mem);
+    if (filters.empty()) return out;
+    if (inst.cfg.game_dir.empty()) throw Error("config_invalid", "game_dir is not set");
+    const fs::path ow{std::string(inst.overwrite_dir)};
+    const fs::path data = resolve_ci_under(fs::path(std::string(inst.cfg.game_dir)), "Data");
+    std::error_code ec;
+    if (!fs::is_directory(ow, ec)) return out;
+    std::vector<fs::path> files;
+    for (fs::recursive_directory_iterator it(ow, ec), end; !ec && it != end; it.increment(ec)) {
+        const auto st = it->symlink_status(ec);
+        if (!ec && fs::is_regular_file(st)) files.push_back(it->path());
+    }
+    std::sort(files.begin(), files.end());
+    for (const auto& f : files) {
+        const fs::path rel = fs::relative(f, ow);
+        bool hit = false;
+        for (const auto& pat : filters)
+            if (::fnmatch(pat.c_str(), rel.string().c_str(), FNM_CASEFOLD) == 0) { hit = true; break; }
+        if (!hit) continue;
+        const fs::path dest = resolve_ci_under(data, rel);
+        PromoteEntry e(mem);
+        e.path = string(rel.string(), mem);
+        e.dest = string(dest.string(), mem);
+        e.skipped = fs::exists(fs::symlink_status(dest, ec));
+        if (execute && !e.skipped) {
+            fs::create_directories(dest.parent_path(), ec);
+            if (ec) throw Error("io_error", "promote: mkdir failed: " + ec.message(), dest.parent_path().string());
+            fs::rename(f, dest, ec);
+            if (ec) {
+                ec.clear();
+                fs::copy_file(f, dest, fs::copy_options::none, ec);
+                if (ec) throw Error("io_error", "promote: copy failed: " + ec.message(), dest.string());
+                fs::remove(f, ec);
+            }
+        }
+        out.push_back(std::move(e));
+    }
+    return out;
 }
 
 bool farm_in_use(const Instance& inst) {

@@ -93,3 +93,28 @@ TEST(farm_in_use_detects_process_with_cwd_in_farm) {
     ::waitpid(pid, nullptr, 0);
     CHECK(!farm_in_use(i));
 }
+
+TEST(promote_previews_then_moves_without_clobbering) {
+    Tmp t;
+    Instance i = make(t);
+    i.cfg.game_dir.assign((t.dir / "game").string());
+    put(t.dir / "game/DATA/Skyrim.esm", "G");  // 游戏目录里的目录名是大写
+    put(t.dir / "inst/overwrite/ccA.esl", "A");
+    put(t.dir / "inst/overwrite/ccA.bsa", "B");
+    put(t.dir / "inst/overwrite/Meshes/m.nif", "M");
+    put(t.dir / "inst/overwrite/Skyrim.esm", "FAKE");  // 目标已存在
+    const std::vector<std::string> f{"cc*", "skyrim.esm"};
+
+    auto prev = promote_overwrite(i, f, false);
+    CHECK_EQ(prev.size(), std::size_t{3});
+    CHECK(fs::exists(t.dir / "inst/overwrite/ccA.esl"));  // 预览不动文件
+    CHECK(!fs::exists(t.dir / "game/DATA/ccA.esl"));
+
+    auto done = promote_overwrite(i, f, true);
+    CHECK_EQ(done.size(), std::size_t{3});
+    CHECK_EQ(slurp(t.dir / "game/DATA/ccA.esl"), std::string("A"));  // 沿用 DATA 的写法
+    CHECK_EQ(slurp(t.dir / "game/DATA/Skyrim.esm"), std::string("G"));  // 不覆盖
+    CHECK(fs::exists(t.dir / "inst/overwrite/Skyrim.esm"));
+    CHECK(fs::exists(t.dir / "inst/overwrite/Meshes/m.nif"));  // 未匹配的不动
+    CHECK(promote_overwrite(i, {}, true).empty());
+}

@@ -121,6 +121,18 @@ struct OverwriteCaptureData {
     bool changed = false;
 };
 
+struct PromoteRow {
+    std::pmr::string path;
+    std::pmr::string dest;
+    bool skipped = false;
+};
+struct OverwritePromoteData {
+    bool executed = false;
+    std::size_t moved = 0;
+    std::size_t skipped = 0;
+    std::pmr::vector<PromoteRow> files;
+};
+
 // ---- run --------------------------------------------------------------------
 struct RunData {
     std::pmr::string exe;

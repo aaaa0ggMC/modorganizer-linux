@@ -65,6 +65,10 @@ constexpr OptionSpec kOptRun[] = {
     {"detach", "", "--detach", "Return right after launching (do not wait; skips overwrite capture)", false},
     {"dry-run", "", "--dry-run", "Print the launch command only; change nothing", false},
 };
+constexpr OptionSpec kOptPromote[] = {
+    {"filter", "", "--filter", "Glob(s) relative to overwrite/, comma separated, case-insensitive (required)", true},
+    {"yes", "", "--yes", "Actually move files into the real game Data directory (default: preview only)", false},
+};
 constexpr OptionSpec kOptConflicts[] = {
     {"mod", "", "--mod", "Only conflicts involving this mod", true},
 };

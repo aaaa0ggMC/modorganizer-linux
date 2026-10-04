@@ -3,6 +3,8 @@
 // 农场 Data/ 下的文件 → <overwrite>/<相对 Data 的路径>；Data/ 之外的 → <实例根>/overwrite-root/<相对农场根的路径>
 // （不参与合并，仅避免它挡住下一次 apply）。已存在同名目标时覆盖（游戏的较新版本为准）。
 #include <cstddef>
+#include <span>
+#include <string>
 
 #include "mol/instance.hpp"
 
@@ -12,6 +14,27 @@ namespace mol {
 // 调用方应先 require_farm_idle。
 // 返回移动的文件数。农场不存在 → 0。io 失败 → Error{io_error}。
 std::size_t capture_overwrite(const Instance& inst);
+
+// 「永久驻留」：把 <overwrite>/ 里匹配 filters 的文件**移进真实的游戏 Data 目录**（Steam 直接启动游戏也能看到，
+// 例如 Creations）。这是唯一会向游戏目录写入的操作，所以默认只预览（execute=false）。
+// filters：fnmatch 通配（大小写不敏感），匹配相对 overwrite 的路径；空 → 不匹配任何文件（调用方须显式给）。
+// 目标已存在 → 跳过并记入 skipped（绝不覆盖游戏文件）。目标目录大小写按游戏目录里已有名字解析。
+// 执行时调用方应先 require_farm_idle，之后 apply 农场。
+struct PromoteEntry {
+    using allocator_type = mol::allocator_type;
+    string path;  // 相对 overwrite
+    string dest;  // 将要/已经落到的真实路径
+    bool skipped = false;  // 目标已存在
+    explicit PromoteEntry(allocator_type a = {}) : path(a), dest(a) {}
+    PromoteEntry(const PromoteEntry& o, allocator_type a) : path(o.path, a), dest(o.dest, a), skipped(o.skipped) {}
+    PromoteEntry(PromoteEntry&& o, allocator_type a) : path(std::move(o.path), a), dest(std::move(o.dest), a), skipped(o.skipped) {}
+    PromoteEntry(const PromoteEntry&) = default;
+    PromoteEntry(PromoteEntry&&) = default;
+    PromoteEntry& operator=(const PromoteEntry&) = default;
+    PromoteEntry& operator=(PromoteEntry&&) = default;
+};
+vector<PromoteEntry> promote_overwrite(const Instance& inst, std::span<const std::string> filters, bool execute,
+                                       mr* mem = default_mr());
 
 // 是否有进程在使用农场（命令行含农场路径——正斜杠或 Wine 的反斜杠形式——或 cwd 在农场内）。
 bool farm_in_use(const Instance& inst);
