@@ -12,6 +12,7 @@
 //       StatusData d{.farm_path = mol::string(p, mem), ...};
 //     避免默认构造（那会悄悄落到全局 new）。
 #include <cstddef>
+#include <cstdint>
 #include <string>
 #include <vector>
 
@@ -144,6 +145,39 @@ struct DoctorData {
     std::size_t errors = 0;
     std::size_t warnings = 0;
     std::pmr::vector<CheckRow> checks;
+};
+
+// ---- nexus ------------------------------------------------------------------
+struct NexusUserData {
+    std::pmr::string name;
+    std::int64_t user_id = 0;
+    bool is_premium = false;
+    bool is_supporter = false;
+    std::pmr::string key_path;  // login 时给出（key 本身永不输出）
+};
+struct NexusLogoutData {
+    bool removed = false;
+};
+struct NexusFileRow {
+    std::int64_t file_id = 0;
+    std::pmr::string name;
+    std::pmr::string file_name;
+    std::pmr::string version;
+    std::pmr::string category;
+    std::int64_t size_kb = 0;
+    bool is_primary = false;
+};
+struct NexusFilesData {
+    std::pmr::string game;
+    std::int64_t mod_id = 0;
+    std::pmr::vector<NexusFileRow> files;
+};
+struct NexusDownloadData {
+    std::pmr::string path;
+    std::uint64_t size = 0;
+    std::pmr::string game;
+    std::int64_t mod_id = 0;
+    std::int64_t file_id = 0;
 };
 
 // ---- run --------------------------------------------------------------------

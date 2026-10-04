@@ -24,7 +24,8 @@ file(GLOB CORE_SRC CONFIGURE_DEPENDS core/src/*.cpp)
 add_library(mocore STATIC ${CORE_SRC})
 target_include_directories(mocore PUBLIC core/include)
 target_compile_options(mocore PRIVATE -Wall -Wextra)
-target_link_libraries(mocore PUBLIC mol_alib6)
+find_package(CURL REQUIRED)
+target_link_libraries(mocore PUBLIC mol_alib6 CURL::libcurl)
 
 # ---- CLI --------------------------------------------------------------------
 file(GLOB CLI_SRC CONFIGURE_DEPENDS cli/*.cpp)

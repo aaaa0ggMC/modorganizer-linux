@@ -14,6 +14,11 @@ namespace mol {
 //   farm_not_owned       农场目录非空且不含我们的 marker（拒绝触碰）
 //   farm_conflict        期望位置被用户文件占据
 //   farm_busy            农场正被运行中的游戏使用（拒绝 apply/unlink/capture）
+//   network_error        传输层失败 / 下载 HTTP 错误
+//   nexus_auth           缺少/无效的 Nexus API key（401）
+//   nexus_premium        该操作需要 Premium 或 nxm 链接里的 key（403）
+//   nexus_not_found      mod/文件不存在（404）
+//   nexus_rate_limited   触发 Nexus 限流（429）
 //   io_error             其它文件系统错误
 //   game_unavailable     libmo-game 未找到或初始化失败
 struct Error : std::runtime_error {

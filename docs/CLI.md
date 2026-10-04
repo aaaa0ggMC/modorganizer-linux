@@ -49,7 +49,14 @@
 
 - `doctor`  只读体检。data：`{errors,warnings,checks:[{id,level,message,hint}]}`，level ∈ `ok|warn|error`。检查项：`game.dir/exe/data/version`、`skse.loader/version`（按游戏版本推出 `skse64_<a>_<b>_<c>.dll` 并检查存在）、`prefix`、`runner.proton/steam_root`、`profile`、`mods`/`mods.missing`、`farm`/`farm.warnings`/`farm.busy`、`plugins.link`。游戏版本来自游戏层；host 库缺失只降级为 warn。有 error 时退出码 3（ok 仍为 true）。
 
-后续：Nexus。
+- `nexus login [--key-file F]`  从文件或 stdin 读取 Nexus **个人 API key**，**先向 Nexus 验证、通过才保存**到 `~/.config/mo-linux/nexus.key`（0600）。环境变量 `NEXUS_API_KEY` 优先于文件。key 永不出现在输出/日志/错误信息里。data：`{name,user_id,is_premium,is_supporter,key_path}`。
+- `nexus logout`  删除保存的 key。data：`{removed}`。
+- `nexus whoami`  data 同 login（`key_path` 为空）。
+- `nexus files --mod ID`  data：`{game,mod_id,files:[{file_id,name,file_name,version,category,size_kb,is_primary}]}`。
+- `nexus download (--nxm URL | --mod ID --file ID)`  下载到实例 `downloads/`，并写 MO2 兼容的 `.meta`；支持断点续传；进度走 `--events`（`download`）。Premium 账号可直接 `--mod/--file`；免费账号必须用网页上点“慢速下载”得到的 `nxm://…?key=…&expires=…` 链接，否则 `nexus_premium`。data：`{path,size,game,mod_id,file_id}`。
+- Nexus 错误码：`nexus_auth`(401) `nexus_premium`(403) `nexus_not_found`(404) `nexus_rate_limited`(429，含 Retry-After) `network_error`。基址可用 `MOL_NEXUS_API` 覆盖（测试用）。遵循 http(s)_proxy 环境变量。
+
+后续：mod 安装（7z/FOMOD、根目录型 mod 如 SKSE）。
 
 ## 约定
 - 实例与游戏目录输出为绝对 Unix 路径，UTF-8；`plan.ops[].path` 与冲突 `path` 为相对农场根的路径，`plan.ops[].target` 为绝对源路径（无目标时为空）。

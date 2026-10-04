@@ -69,6 +69,17 @@ constexpr OptionSpec kOptPromote[] = {
     {"filter", "", "--filter", "Glob(s) relative to overwrite/, comma separated, case-insensitive (required)", true},
     {"yes", "", "--yes", "Actually move files into the real game Data directory (default: preview only)", false},
 };
+constexpr OptionSpec kOptNexusLogin[] = {
+    {"key-file", "", "--key-file", "Read the API key from this file (default: stdin)", true},
+};
+constexpr OptionSpec kOptNexusFiles[] = {
+    {"mod", "", "--mod", "Nexus mod id", true},
+};
+constexpr OptionSpec kOptNexusDownload[] = {
+    {"nxm", "", "--nxm", "nxm:// link (needed for free accounts)", true},
+    {"mod", "", "--mod", "Nexus mod id", true},
+    {"file", "", "--file", "Nexus file id", true},
+};
 constexpr OptionSpec kOptConflicts[] = {
     {"mod", "", "--mod", "Only conflicts involving this mod", true},
 };
