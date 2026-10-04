@@ -1,7 +1,26 @@
 # mo-linux HANDBOOK
 
 > 面向**审阅与复核**：设计意图、关键取舍、当前进度、未验证项、可执行的检查清单。
-> 状态快照：2026-10-04。凡标 **[已验证]** 的都有可重跑的命令；**[未验证]** 的没有，别当成事实。
+> 状态快照：2026-10-04（**暂停点**，见 §0）。凡标 **[已验证]** 的都有可重跑的命令；**[未验证]** 的没有，别当成事实。
+
+## 0. 暂停点摘要（从这里开始读）
+
+**一句话**：Linux 上已经能用**零修改的上游 MO2 游戏插件**读取真实 Skyrim SE，并把「游戏 + mod」合并成符号链接农场，Proton 容器内实测能穿过链接读到游戏文件；CLI 外壳已由下游交回，**尚未合并、尚未由我完整复核**；真正启动游戏、plugins.txt 接线等还没做。
+
+**已完成并合入 `main`（均有可重跑的测试，见 §13）**
+- core：casefold 合并、链接农场、MO2 格式、实例模型、runner、`GameHost`（dlopen）。manifest 与 `mo-linux.json` 已迁到 alib6 `AData`，**core 里不再有 nlohmann**。
+- shim（libwinshim）：路径/errno/大小写解析、文件/映射/PE 头、时间、shell（含 `SHFileOperationW` 的 DELETE/COPY/MOVE/RENAME）、COM 存根、ini、PE 版本资源、Wine 注册表（只读）。5 组测试在 ASan/UBSan 下通过。
+- host（libmo-game.so，clang）：上游 `game_bethesda`（gamebryo+creation+skyrimse）**零修改**编译链接；假 `IOrganizer`；C ABI：`create / info_json / set_profile / mappings_json / initialize_profile / about_to_run`。
+- **在本机真实 Skyrim SE 上实测**：`info_json` 返回正确的目录、DLC、可执行文件、SKSE、ini 名、`gameVersion`（见 §7.5）；`mappings()` 返回 profile 的 `plugins.txt/loadorder.txt` → 游戏 AppData 的映射；`initializeProfile` 复制出正确内容；`prepareIni` 正确读写 ini。
+- 农场在真实数据上：176 文件，合并 ≤10ms、应用约 2ms、二次 plan 为 0。Proton 9.0(Beta) + 一次性前缀：容器能列出农场，并通过链接复制出与原文件逐字节一致的 249MB `Skyrim.esm`。
+
+**已交回、未合并（在 worktree `../modorganizer-linux-wp8`，分支 `deputy/wp8`，文件尚未 commit）**
+- WP8 CLI 外壳（`cli/*`、`tests/test_cli_*`、`tests/e2e_cli.sh`）。我做过的复核：该 worktree 里完整构建通过、`ctest` 14/14 通过。**我没做的**：重跑它的 e2e 脚本、逐文件读 `cli/*` 代码、对照 `docs/CLI.md` 逐命令核字段。
+- 已知需要返工的点（见 §10）：仍保留了 `cli/args.cpp` 的选项自解析；**还没有任何日志输出**（要用 alib6 `Logger` 写 stderr）；`game info` 等命令未做。
+
+**对 alib6（`~/Projs/aaaa0ggmcLib`）的修改：工作区未提交，需作者自行提交**（5 个文件，见 §6.5）。
+
+**暂停时的明确未做项**：真正启动 `SkyrimSE.exe`（需用户确认）、`plugins sync` 与 `mappings()` 的符号链接物化（R9）、overwrite 捕获、`doctor`、固定 `third_party` 提交、LICENSE。
 
 ## 1. 目标与边界
 
@@ -57,12 +76,11 @@ mo-linux (CLI, GCC, C++26, alib6)            ← cli/
 | `core/.../mo2fmt` | modlist/plugins/loadorder/ini/`wine_to_unix` | 完成；**缺 Ini/loadorder 的 writer** |
 | `core/.../instance` | 读实例、`init`、mods 启停/移动、`build_farm_model`、`plan/apply_instance` | 完成，6 个测试 |
 | `core/.../runner` | `build_launch`（Proton/Wine argv+env）、`spawn_launch` | 完成，纯函数部分有测试；**未真实启动过** |
-| `core/.../game_host` | dlopen 封装 `libmo-game.so` | 完成；真实加载**未验证**（等 WP5） |
-| `cli/` | 命令路由、envelope、events、各子命令 | **WP8 返工中** |
+| `core/.../game_host` | dlopen 封装 `libmo-game.so` | 完成；真实加载已用 C 探针验证，`GameHost` 类本身尚无针对真实 .so 的测试（`test_game_host` 只测错误路径） |
+| `cli/` | 命令路由、envelope、events、各子命令 | **WP8 已交回，未合并**（见 §0、§10） |
 | `shim/include` | Windows 头文件 shim（`windows.h` 等；声明即契约） | 完成 |
-| `shim/src` | `internal`（路径转换/CI 解析/errno）、`files`、`misc` | 完成（ASan/UBSan 通过） |
-| `shim/src` | `ini`、`version`、`registry` | **WP5 进行中** |
-| `host/` | clang 子工程：uibase 副本 + game_bethesda + 假 IOrganizer + C ABI | **能编译链接**；运行**未验证** |
+| `shim/src` | `internal`、`files`、`misc`、`ini`、`version`、`registry` | 完成（5 组测试，ASan/UBSan 通过） |
+| `host/` | clang 子工程：uibase 副本 + game_bethesda + 假 IOrganizer + C ABI | 编译链接、运行均已在真实 Skyrim 上验证（部分接口，见 R1） |
 | `patches/uibase/` | 对 uibase 的补丁（保留 CRLF） | 1 个补丁 |
 | `scripts/` | `gen_include_aliases.py`、`prepare_uibase.sh`、`make_uibase_patch.py`、`syntax_check.sh` | 完成 |
 | `cmake/alib6.cmake` `tests_alib6/` | alib6 的 CMake 接入与冒烟 | 完成（16/16） |
@@ -100,13 +118,18 @@ mo-linux (CLI, GCC, C++26, alib6)            ← cli/
 - `registry.cpp` 整体替换为 `host/overrides/uibase/registry.cpp`（无头版，不弹对话框）。
 - 漏洞提醒：补丁与上游版本绑定；升级 uibase 必须重跑 `scripts/make_uibase_patch.py` 并复核。
 
-## 6.5 对 alib6 的改动（在 `~/Projs/aaaa0ggmcLib`，工作区未提交，需作者自行提交）
+## 6.5 对 alib6 的改动（在 `~/Projs/aaaa0ggmcLib`，**工作区未提交**，需作者自行提交）
 
-`Command` 的命令行解析有两处缺陷，已按用户授权修复（`modules/alib6/core/cmd.cpp`、`include/alib6/core/cmd.cppm`，约 85 行；`tests/alib6/test_cmd.cpp` 新增 5 个用例，alib6 的 cmd/parser/router 共 17 个测试通过）：
+按用户授权修复了 alib6 的 4 处缺陷。涉及文件：`include/alib6/core/cmd.cppm`、`modules/alib6/core/cmd.cpp`、`modules/alib6/data/json.cpp`、`tests/alib6/test_cmd.cpp`、`tests/alib6/test_adata.cpp`。回归：alib6 的 cmd/parser/router/adata 测试共 **35 个全部通过**（用 `scratchpad` 里的 CMake 工程 + gtest 跑，因为 alib6 自己用 xmake；改动前 cmd/parser/router 为 12 个全过）。
+
 1. **前置选项**：第一个路由 token 之前的选项/开关（`prog -j -i /x mods list`）此前不会让路由下降，整条路由被挤成位置参数。现在 `dispatch_pipeline` 在 `router.match` 前做"根层预扫描"，选项落入 main 层，`has/get` 跨层可见。
 2. **`--` 终止符**：此前 `--` 后的 `-j` 仍被当作开关，且 `--` 进入 `args()`。现在 `--` 之后一律是位置参数，`--` 本身被吞掉（含前置位置）。
-- 实验结论（可复核）：选项在第一个路由 token 之后放哪里都行；`--name=value` 与 `--name value` 均支持；`has()` 扫描所有层，`get()` 从当前层往上回溯。
-- 因此 CLI 层**不需要**自己解析选项；WP8 当初自写的 `cli/args.cpp` 应删除（见 §10 WP8）。
+3. **`Option::name` 吞路由 token**：`.name="instance"` 会把同名子命令 token 当选项吞掉（WP8 因此花了很久排查）。现在 `name` 只在没有 `long_name/short_name` 时才参与 token 匹配（`token_keys`）；只声明 `name` 的选项行为不变（有回归用例）。**注意这是行为变更**：此前同时声明了破折号别名和 `name` 的用法，裸 `name` 不再能匹配 token。
+4. **JSON 转义不合法**：`dump` 复用了 C 风格的 `str::escape`（输出 `\a \v \e \xNN`，非合法 JSON），对象键完全不转义，`ensure_ascii` 时非 BMP 用 `\UXXXXXXXX`（非法）。现在 `json.cpp` 有独立的 RFC 8259 转义（控制字符 `\u00XX`、键转义、代理对、非法 UTF-8→U+FFFD），`str::escape` 本身未改。
+
+- 实验结论（可复核，脚本在 scratchpad）：选项在第一个路由 token 之后放哪里都行；`--name=value` 与 `--name value` 均支持；`has()` 扫描所有层，`get()` 从当前层往上回溯。
+- **待核实**：WP8 汇报说"Command 只在路由 token 之后、位置参数之前解析选项"，但我的实验里 `mods enable ModA -j --to 3`（选项在位置参数之后）是正常的；WP8 当时的观察可能受第 3 点（`name` 撞车）影响。下一轮让它删除 `cli/args.cpp` 的自解析并以此验证。
+- 其它 alib6 限制（WP8 发现，未改）：`import std/alib6` 与文本 `#include` 标准库头在同一 TU（GCC 16）互相重定义 → **所有 `#include` 必须排在所有 `import` 之前**；`to_adata` 把枚举输出为标识符（`Mkdir`），规格要小写 → CLI 侧手工映射。
 
 ## 7. 已知的"悄悄不一样"之处（审阅重点）
 
@@ -154,11 +177,12 @@ ctest --test-dir build --output-on-failure
 | WP2 | MO2 格式解析 | opencode | 通过 |
 | WP3 | 链接农场 | opencode | 通过 |
 | WP4 | alib6 的 CMake 接入 | opencode | 通过（冷构建 25.8s） |
-| WP5 | shim：ini / 版本资源 / 注册表 | opencode | **进行中**（超出 shell 预算，持续迭代） |
+| WP5 | shim：ini / 版本资源 / 注册表 | opencode | 通过；我复跑并加了 ASan/UBSan 复核（它自带 PE 随机翻转 fuzz 与并发测试） |
 | WP6 | shim：文件/映射/时间/shell/COM | opencode | 通过；我加了 ASan/UBSan 复核 |
 | WP7 | 实例模型 | 副总监自写 | 完成 |
-| WP8 | CLI 外壳 | opencode | **返工中**：撤销手写 JSON，改用反射；做 e2e 联调。**下一轮**：删除 `cli/args.cpp` 的选项自解析，直接读 `CommandInput`（alib6 的 Command 已修） |
-| — | runner、game_host | 副总监自写 | 完成（未真实启动） |
+| WP8 | CLI 外壳 | opencode | **已交回，未合并**。第一轮：手写 JSON（我的 brief 写错了）→ 返工：改用 alib6 反射 + 联调，已交回。我复核了构建与 ctest（14/14），**未**重跑 e2e、未逐文件读代码。**下一轮应做**：①删除 `cli/args.cpp` 的选项自解析，直接读 `CommandInput`；②加 alib6 `Logger`→stderr（`-q` 控制级别）；③`game info` 命令（用 `GameHost`）；④核对 `docs/CLI.md` 每个命令的 `data` 字段。它超出了 shell 预算（约 57 次/40）。 |
+| — | runner、game_host | 副总监自写 | 完成（未真实启动游戏；`proton run cmd` 级别的容器实测已做） |
+| — | host 的 C ABI 扩展、`SHFileOperationW` COPY/MOVE/RENAME、uibase 的 include 修复 | 副总监自写 | 完成，见 §7.5 |
 
 提交均带 `Co-Authored-By` 与 `Claude-Session`；提交前跑 `privacy-scan.sh`（有 4 次命中均为测试里的占位路径，已逐条确认为误报，其中一次改为中性路径）。
 
@@ -166,7 +190,7 @@ ctest --test-dir build --output-on-failure
 
 | 项 | 说明 | 严重度 |
 |---|---|---|
-| R1 | ~~host 运行时未验证~~ **已验证（部分）**：`libmo-game` 已能 `dlopen`，`GameSkyrimSE::init/setGamePath` 与全部信息查询在本机真实 Skyrim SE 目录上返回正确结果（目录、DLC、可执行文件、SKSE、ini 名、`gameVersion`=1.7.104.0，已用 `strings -e l SkyrimSE.exe` 独立核对）。**仍未验证**：`initializeProfile`、`GamePlugins::writePluginLists`、存档读取等会走更多 shim 路径的功能 | 中 |
+| R1 | **host 已验证到的范围**：`libmo-game` 在本机真实 Skyrim SE 上 `create/info/mappings/initializeProfile/aboutToRun` 均正确（`gameVersion`=1.7.104.0 已用 `strings -e l SkyrimSE.exe` 独立核对；`initializeProfile` 与 `prepareIni` 在假前缀上验证）。**仍未验证**：`GamePlugins::writePluginLists`、存档读取（`SaveGameInfo`）、`DataArchives`、`LocalSavegames`、`UnmanagedMods` 等会走更多 shim 路径的功能 | 中 |
 | R2 | ~~Proton 启动未实测~~ **已验证（容器与环境变量部分）**：用一次性前缀（`/tmp`）跑 `proton run cmd /c dir`，`STEAM_COMPAT_MOUNTS` / `PRESSURE_VESSEL_FILESYSTEMS_RW` 的取值足以让容器看到农场与其链接目标。**未验证**：真正启动 `SkyrimSE.exe`（需要交互与用户确认） | 中 |
 | R3 | ~~符号链接在 Wine/容器内的行为~~ **文件级已验证**：Wine 经农场内符号链接看到目标文件真实大小，复制出的 249MB `Skyrim.esm` 与原文件逐字节一致。**未验证**：SKSE 注入、游戏对自身目录的探测、游戏写入（新文件落在农场而非 Steam 目录；已有链接文件被就地修改会写穿到 Steam 目录——需要 overwrite 捕获机制，尚未实现） | 中 |
 | R4 | `third_party` 未固定 commit / 未建 submodule；uibase 补丁与版本绑定 | 中 |
@@ -176,16 +200,19 @@ ctest --test-dir build --output-on-failure
 | R8 | `write_modlist` 丢 `*` 行（见 §7-3） | 低 |
 | R9 | **plugins.txt / ini / 存档的 profile 同步**：设计已明确、部分已实现。上游 `mappings()`（profile 的 `plugins.txt`/`loadorder.txt` → 游戏 AppData）、`initializeProfile()`、`prepareIni()` 已通过 C ABI 暴露（`mo_game_mappings_json / mo_game_initialize_profile / mo_game_about_to_run`），并在假前缀上实测：`initializeProfile` 复制出正确内容，`prepareIni` 正确追加 `[Launcher] bEnableFileSelection=1` 且保留原有内容。**CLI 侧尚未接线**：把 `mappings()` 物化为符号链接（游戏写 plugins.txt 时写穿到 profile 文件，与 MO2/usvfs 语义一致）、每 profile 的 ini/存档隔离、overwrite 捕获 | 中 |
 | R10 | **Qt 文件访问不做大小写不敏感**的真实后果：游戏跑过后会生成 `Skyrim.ini`/`SkyrimPrefs.ini`（大写），上游 `initializeProfile` 用 Qt 判断 `skyrim.ini` 是否存在 → 判为不存在 → 回退到游戏默认 ini，忽略用户已有设置。缓解方案（任选其一，待做）：①host 在调用前建一个只含小写别名链接的影子 Documents 目录并临时覆盖 shim 的 Documents 路径（不碰用户前缀）；②core 自己实现这一步 ini 复制 | 中 |
+| R11 | **WP8 的 CLI 尚未被我完整复核**，且当前版本没有日志输出、仍有选项自解析。合并前必须做完 §10 WP8 的"下一轮应做" | 中 |
+| R12 | **alib6 的 4 处修改未提交**，且第 3 点是行为变更；若作者在别处使用了"同时声明破折号别名与 name，并依赖裸 name 匹配"的写法会受影响 | 中 |
 
-## 12. 路线图（建议顺序）
+## 12. 路线图（建议顺序；已完成项已划去）
 
-1. **收尾当前批次**：WP5 → 合并 → 跑通 `libmo-game` 对真实 Skyrim 目录的 `info`（我本机有 `~/.steam/steam/steamapps/common/Skyrim Special Edition` 与 `compatdata/489830`）。
-2. WP8 返工 → 合并 → CLI 端到端。
-3. `game info`、`plugins sync`（用上游 `GamebryoGamePlugins` 写 `plugins.txt` 到前缀 AppData）、profile 的 ini/存档隔离（R9）。
-4. `run`：真实 Proton 启动实验（先 `SkyrimSE.exe`，再 `skse64_loader.exe`）→ 固化 R2/R3 的结论。
-5. `doctor`（检查前缀、Proton、SKSE 版本匹配、大小写冲突、manifest 漂移）。
-6. 固定 `third_party` 提交、补 LICENSE、`mo2fmt` writer、uibase 日志转发到 alib6。
-7. **后话**：Nexus（SSO/API key、`is_premium`、`nxm://` 处理、下载；需 libcurl；见对话结论）、mod 安装（7z + FOMOD）。
+1. ~~收尾当前批次：WP5 → 合并 → 真实 Skyrim 的 `info`~~ 已完成。
+2. **WP8 第二轮**（见 §10）→ 合并 → CLI 端到端（含 `game info`）。
+3. `plugins sync`：把 `mo_game_mappings_json` 的映射物化为符号链接（profile 的 plugins.txt/loadorder.txt → 前缀 AppData），并在 `apply` 里调用 `initialize_profile`（新 profile）与 `about_to_run`（写 `bEnableFileSelection`）。先解决 R10 的 ini 大小写问题。
+4. `run`：真实启动实验（先 `SkyrimSE.exe`，再 `skse64_loader.exe`）；**需用户确认**（会启动游戏、写 Wine 前缀）。
+5. overwrite 捕获（游戏在农场里新建的文件移回 `overwrite/`）。
+6. `doctor`（前缀、Proton、**SKSE 与游戏版本是否匹配**——本机现在就不匹配、大小写冲突、manifest 漂移）。
+7. 固定 `third_party` 提交（submodule）、补 LICENSE（GPL-3.0）、`mo2fmt` 的 Ini/loadorder writer、uibase 日志转发到 alib6。
+8. **后话**：Nexus（SSO/API key、`is_premium`、`nxm://` 处理、下载；需 libcurl）、mod 安装（7z + FOMOD）。
 
 ## 13. 审阅清单（可直接照着跑）
 
@@ -204,7 +231,16 @@ cmake -S host -B /tmp/h -G Ninja -DCMAKE_CXX_COMPILER=clang++ -DCMAKE_BUILD_TYPE
 cmake -S . -B /tmp/a -G Ninja -DMOL_BUILD_HOST=OFF -DCMAKE_BUILD_TYPE=Debug \
   -DCMAKE_CXX_FLAGS="-fsanitize=address,undefined -fno-omit-frame-pointer" && cmake --build /tmp/a --target test_shim_files test_shim_misc && /tmp/a/shim/test_shim_files && /tmp/a/shim/test_shim_misc
 
-# 5) alib6 反射序列化可用（见 WP8 返工 brief 的片段）
+# 5) alib6：cmd/parser/router/adata 的 gtest（改动已在作者工作区，未提交）
+#    用 CMake 接入 mol_alib6 后编译 ~/Projs/aaaa0ggmcLib/tests/alib6/{main,test_cmd,test_parser,test_router,test_adata}.cpp（需要 gtest）
+#    期望 35 个全部通过
+
+# 6) WP8（未合并）：在其 worktree 里
+cmake -S ../modorganizer-linux-wp8 -B /tmp/w8 -G Ninja -DMOL_BUILD_HOST=OFF && cmake --build /tmp/w8 -j8 && ctest --test-dir /tmp/w8
+bash ../modorganizer-linux-wp8/tests/e2e_cli.sh      # 我尚未重跑；先读脚本再跑（它会在 /tmp 下造实例）
+
+# 7) 真实 Skyrim 上的探测（只读；用假前缀以免写你的 Wine 前缀）
+#    需要一个调用 mo_game_create 的小探针（见 host/include/mo_game.h），当前没有放进仓库
 ```
 审阅时建议优先看：`core/src/merge.cpp`（规则 §5.1 是否都落实）、`core/src/linkfarm.cpp`（`apply` 中途失败的 manifest 处理、`Remove` 的非递归保护）、`shim/src/internal.cpp`（`to_unix_path`/`resolve_ci` 的边界）、`host/src/fake_organizer.cpp`（假 `IOrganizer` 的默认值是否会让游戏插件走到错误分支）、`patches/uibase/`。
 
