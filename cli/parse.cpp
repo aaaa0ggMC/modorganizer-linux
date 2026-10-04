@@ -125,6 +125,11 @@ void build_parsed_args(const alib6::Command::CommandInput& in, std::span<const O
 
     // 2. 本命令允许的选项：缺值检查 + 收进 options
     for (const auto& spec : specs) {
+        if (!spec.takes_value) {  // 开关：alib6 按注册别名判断是否出现
+            if (toggle_present(in, spec.name))
+                out.options.emplace_back(mol::string(spec.long_name, mem), mol::string(mem));
+            continue;
+        }
         const Found f = find_option(in, spec);
         if (!f.present) continue;
         if (spec.takes_value) {
@@ -140,6 +145,13 @@ void build_parsed_args(const alib6::Command::CommandInput& in, std::span<const O
 
     // 3. 注册过、但不属于本命令的选项/开关 → 用法错误
     //    （例如 `mods list --game-dir /x`：值已被 alib6 提取，不会留在 remains 里）
+    for (const auto& tog : in.cmd.registered_toggles) {
+        if (name_allowed(tog.name, specs)) continue;
+        if (toggle_present(in, tog.name)) {
+            out.error = mol::string("unknown option " + std::string(tog.long_name) + " for " + cmd, mem);
+            return;
+        }
+    }
     for (const auto& opt : in.cmd.registered_options) {
         if (name_allowed(opt.name, specs)) continue;
         if (find_option(in, opt).present) {

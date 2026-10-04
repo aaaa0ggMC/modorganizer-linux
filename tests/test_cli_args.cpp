@@ -51,6 +51,11 @@ Capture run(std::string_view route_path, std::span<const OptionSpec> allowed,
     Command cmd(&cmd_arena);
     auto register_opts = [&cmd](std::span<const OptionSpec> specs) {
         for (const auto& o : specs) {
+            if (!o.takes_value) {  // 与 main 一致：开关用 register_toggle
+                cmd.register_toggle({.name = o.name, .short_name = o.short_name,
+                                     .long_name = o.long_name, .description = o.description});
+                continue;
+            }
             cmd.register_option({.name = o.name,
                                  .short_name = o.short_name,
                                  .long_name = o.long_name,
@@ -164,6 +169,18 @@ TEST(subcommand_option_inline_and_before_positional) {
     CHECK(c.args.ok());
     CHECK_EQ(c.args.positionals.size(), std::size_t{1});
     CHECK_EQ(std::string(c.args.get("--to", "", mem())), std::string("3"));
+}
+
+TEST(run_toggles_do_not_swallow_each_other) {
+    const Capture c = run("run", cli::kOptRun, {"run", "--skse", "--detach"});
+    CHECK(c.args.ok());
+    CHECK(c.args.get_bool("--skse", false));
+    CHECK(c.args.get_bool("--detach", false));
+    const Capture d = run("run", cli::kOptRun, {"run", "--detach", "--exe", "x.exe", "--skse"});
+    CHECK(d.args.ok());
+    CHECK(d.args.get_bool("--detach", false));
+    CHECK(d.args.get_bool("--skse", false));
+    CHECK_EQ(std::string(d.args.get("--exe", "", mem())), std::string("x.exe"));
 }
 
 TEST(get_bool_switch_present_is_true) {

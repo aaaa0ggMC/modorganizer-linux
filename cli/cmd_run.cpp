@@ -63,6 +63,7 @@ Result run_run(Context& ctx) {
 
     RunData d{.exe = mol::string(exe, ctx.mem),
               .dry_run = dry,
+              .detached = detach,
               .synced_plugins = synced,
               .game_exit_code = game_exit,
               .captured = captured_before + captured_after,

@@ -158,7 +158,12 @@ int main(int argc, char** argv) {
                     break;
                 }
             }
-            if (!have) {
+            if (!have && !s.takes_value) {
+                cmd.register_toggle({.name = s.name,
+                                     .short_name = s.short_name,
+                                     .long_name = s.long_name,
+                                     .description = s.description});
+            } else if (!have) {
                 cmd.register_option({.name = s.name,
                                      .short_name = s.short_name,
                                      .long_name = s.long_name,

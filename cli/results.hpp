@@ -137,6 +137,7 @@ struct OverwritePromoteData {
 struct RunData {
     std::pmr::string exe;
     bool dry_run = false;
+    bool detached = false;
     bool synced_plugins = false;
     int game_exit_code = 0;
     std::size_t captured = 0;  // 移回 overwrite 的文件数（启动前残留 + 退出后）
