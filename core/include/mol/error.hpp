@@ -13,6 +13,7 @@ namespace mol {
 //   invalid_argument     参数取值非法
 //   farm_not_owned       农场目录非空且不含我们的 marker（拒绝触碰）
 //   farm_conflict        期望位置被用户文件占据
+//   farm_busy            农场正被运行中的游戏使用（拒绝 apply/unlink/capture）
 //   io_error             其它文件系统错误
 //   game_unavailable     libmo-game 未找到或初始化失败
 struct Error : std::runtime_error {

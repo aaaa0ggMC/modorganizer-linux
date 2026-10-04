@@ -27,6 +27,7 @@ Result run_run(Context& ctx) {
     const auto host = mol::GameHost::open();
     const auto game = host.create(inst.cfg.game, inst.cfg.game_dir, inst.cfg.prefix, inst.cfg.prefix_user);
 
+    if (!dry) mol::require_farm_idle(inst);
     std::size_t captured_before = 0;
     bool synced = false;
     if (!dry) {

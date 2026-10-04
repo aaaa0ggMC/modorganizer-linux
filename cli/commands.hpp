@@ -11,6 +11,7 @@ Result run_version(Context&);
 Result run_game_info(Context&);
 Result run_plugins_sync(Context&);
 Result run_run(Context&);
+Result run_overwrite_capture(Context&);
 Result run_instance_init(Context&);
 Result run_instance_show(Context&);
 Result run_mods_list(Context&);

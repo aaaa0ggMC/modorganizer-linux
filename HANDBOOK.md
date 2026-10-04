@@ -189,6 +189,8 @@ ctest --test-dir build --output-on-failure
 
 Claude 阶段的提交带 `Co-Authored-By` 与 `Claude-Session`；接续提交不冒用 Claude 身份。提交前跑 `privacy-scan.sh`（有 4 次命中均为测试里的占位路径，已逐条确认为误报，其中一次改为中性路径）。
 
+**overwrite 捕获的已知限制（2026-10-04）**：①游戏若**直接改写**已有文件（非删除重建），修改会穿过符号链接落到游戏目录/mod 原文件，farm 拦不住（usvfs 能）——根治要 FUSE/overlay；②`Data/` 之外的新文件进 `overwrite-root/`，不参与合并；③同名覆盖时旧文件备份到 `overwrite-backup/`；④运行中拒绝 apply/unlink/capture（扫 /proc，`farm_busy`）。
+
 ## 11. 风险与未决
 
 | 项 | 说明 | 严重度 |

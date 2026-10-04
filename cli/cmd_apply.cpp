@@ -3,6 +3,7 @@
 #include <algorithm>
 
 #include "mol/instance.hpp"
+#include "mol/overwrite.hpp"
 
 #include "commands.hpp"
 
@@ -25,6 +26,7 @@ Result run_apply(Context& ctx) {
     try {
         const mol::Instance inst =
             mol::load_instance(ctx.instance_dir, ctx.profile_override(), ctx.mem);
+        mol::require_farm_idle(inst);
         const mol::FarmModel model = mol::build_farm_model(inst, ctx.profile_override(), ctx.mem);
         const mol::Plan plan = mol::plan_instance(inst, model, ctx.mem);
         const std::size_t total = plan.ops.size();

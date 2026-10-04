@@ -1,6 +1,7 @@
 // mo-linux unlink 子命令：删除农场（幂等：不存在 → removed:false，不是错误）。
 // 混用约束：所有 #include 在 import 之前（详见 cli/cmd_common.hpp 文件头）。
 #include "mol/instance.hpp"
+#include "mol/overwrite.hpp"
 
 #include "commands.hpp"
 
@@ -13,6 +14,7 @@ Result run_unlink(Context& ctx) {
     const mol::Instance inst =
         mol::load_instance(ctx.instance_dir, ctx.profile_override(), ctx.mem);
 
+    mol::require_farm_idle(inst);
     bool removed = false;
     if (path_exists(inst.farm_path)) {
         try {

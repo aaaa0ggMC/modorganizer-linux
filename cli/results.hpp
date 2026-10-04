@@ -115,6 +115,12 @@ struct PluginsSyncData {
     std::pmr::vector<SyncRow> entries;
 };
 
+// ---- overwrite capture ------------------------------------------------------
+struct OverwriteCaptureData {
+    std::size_t captured = 0;
+    bool changed = false;
+};
+
 // ---- run --------------------------------------------------------------------
 struct RunData {
     std::pmr::string exe;

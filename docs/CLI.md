@@ -43,6 +43,9 @@
 
 未给出 `--game-dir/--prefix/--proton-path/--steam-root` 时从本机 Steam 自动探测（libraryfolders.vdf、compatdata/489830/pfx、最新的 Proton）；探测不到才报错。实例目录可用环境变量 `MOL_INSTANCE` 设为默认。
 
+- `overwrite capture`  把农场里游戏新建的真实文件移回 `overwrite/`（`Data/` 下按相对路径；其余进 `<实例>/overwrite-root/`）。目标已有同名文件时旧文件先备份到 `<实例>/overwrite-backup/`。data：`{captured,changed}`。
+- `apply`/`unlink`/`run`/`overwrite capture` 在有进程使用农场（命令行含农场路径或 cwd 在农场内，含 Wine 的反斜杠路径）时拒绝，错误码 `farm_busy`。
+
 后续：`doctor`。
 
 ## 约定
