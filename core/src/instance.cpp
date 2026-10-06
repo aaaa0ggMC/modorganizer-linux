@@ -473,6 +473,17 @@ void collect_layers(const Instance& inst, std::string_view profile, bool data_on
         }
     }
     if (is_dir(P(inst.overwrite_dir))) specs.push_back({"<overwrite>", S(inst.overwrite_dir), "Data", false});
+    // 工具/游戏在农场根（Data/ 之外）写下的文件：最高优先级的根目录层（类似 MO2 的 Root Builder）。
+    // 例如在农场里运行降级补丁后的 SkyrimSE.exe、ENB 的 ini——真实游戏目录始终不动。
+    const std::string oroot = S(inst.root) + "/overwrite-root";
+    if (is_dir(P(oroot))) {
+        if (data_only) {
+            if (auto d = data_of(oroot)) specs.push_back({"<overwrite-root>", *d, "Data", false});
+            else specs.push_back({"<overwrite-root>", "", "", false});
+        } else {
+            specs.push_back({"<overwrite-root>", oroot, "", false});
+        }
+    }
 }
 
 }  // namespace

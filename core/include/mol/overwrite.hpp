@@ -13,7 +13,21 @@ namespace mol {
 // 目标已存在同名文件时，旧文件先移到 <实例根>/overwrite-backup/<相对路径>（再旧的备份被替换），不会静默丢失。
 // 调用方应先 require_farm_idle。
 // 返回移动的文件数。农场不存在 → 0。io 失败 → Error{io_error}。
+// 工具运行期间 libmol-cow 做的写时复制在 <实例>/.mol-cow.log 里有记录：内容与原文件相同的副本（只是以写方式
+// 打开、没改）直接丢弃，下次 apply 恢复成链接；不在 manifest 里的符号链接（工具挪动/改名了我们的链接）先换成
+// 真实副本再收回。
 std::size_t capture_overwrite(const Instance& inst);
+
+// libmol-cow 的日志位置（runner 通过 MOL_COW_LOG 交给注入库）。
+std::string cow_log_path(const Instance& inst);
+// 本轮（上次 capture 之后）写时复制的次数，其中走 reflink 的次数（btrfs/xfs 上应当等于 copies）。capture 前调用。
+struct CowStats {
+    std::size_t copies = 0;
+    std::size_t reflinked = 0;
+};
+CowStats cow_stats(const Instance& inst);
+// src 的内容放到 dst：先试 reflink（btrfs/xfs 上瞬间完成、不占额外空间），不行就普通复制。成功返回 true。
+bool clone_or_copy_file(const std::string& src, const std::string& dst);
 
 // 「永久驻留」：把 <overwrite>/ 里匹配 filters 的文件**移进真实的游戏 Data 目录**（Steam 直接启动游戏也能看到，
 // 例如 Creations）。这是唯一会向游戏目录写入的操作，所以默认只预览（execute=false）。

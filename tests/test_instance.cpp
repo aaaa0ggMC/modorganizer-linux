@@ -145,6 +145,25 @@ TEST(farm_end_to_end) {
     CHECK(plan_instance(inst, build_farm_model(inst)).empty());
 }
 
+TEST(overwrite_root_is_the_highest_root_layer) {
+    Tmp t; fs::path inst_p, game;
+    make_fixture(t, inst_p, game);
+    // 工具在农场根写下的文件（如降级后的 exe）被 capture 收进 overwrite-root：它要盖过游戏本体
+    touch(inst_p / "overwrite-root" / "SkyrimSE.exe", "v16");
+    touch(inst_p / "overwrite-root" / "enblocal.ini", "enb");
+    auto inst = load_instance(inst_p.string());
+    auto model = build_farm_model(inst);
+    CHECK_EQ(std::string(model.layer_names.back()), std::string("<overwrite-root>"));
+    apply_instance(inst, plan_instance(inst, model));
+    fs::path farm = inst.farm_path;
+    CHECK_EQ(fs::read_symlink(farm / "SkyrimSE.exe").string(), (inst_p / "overwrite-root" / "SkyrimSE.exe").string());
+    CHECK(fs::is_symlink(farm / "enblocal.ini"));
+    // 删掉 overwrite-root 里的文件 = 撤销，回到游戏本体
+    fs::remove(inst_p / "overwrite-root" / "SkyrimSE.exe");
+    apply_instance(inst, plan_instance(inst, build_farm_model(inst)));
+    CHECK_EQ(fs::read_symlink(farm / "SkyrimSE.exe").string(), (game / "SkyrimSE.exe").string());
+}
+
 TEST(farm_refuses_foreign_dir) {
     Tmp t; fs::path inst_p, game;
     make_fixture(t, inst_p, game);

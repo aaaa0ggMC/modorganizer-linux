@@ -35,6 +35,19 @@ struct VersionData {
     std::pmr::string version;
 };
 
+// ---- docs -----------------------------------------------------------------
+struct DocTopicRow {
+    std::pmr::string name;   // docs 的 TOPIC
+    std::pmr::string file;   // 源码树里的路径
+    std::pmr::string title;
+    std::int64_t bytes = 0;
+};
+struct DocsData {
+    std::pmr::vector<DocTopicRow> topics;  // 编进二进制的全部文档
+    std::pmr::string topic;                // 给了 TOPIC 时
+    std::pmr::string markdown;             // 该文档全文
+};
+
 // ---- instance -------------------------------------------------------------
 // mo-linux.json 的内容（game…steam_root 九个字段，与 InstanceConfig 对应）
 struct ConfigData {
@@ -287,7 +300,22 @@ struct CollectionInspectData {
     std::int64_t plugin_count = 0;
     std::int64_t rule_count = 0;
     std::pmr::string install_instructions;
+    std::pmr::string url;          // 集合页面
+    std::pmr::string summary;      // 页面上的一句话简介
+    std::pmr::string description;  // 页面说明（Markdown；作者的安装须知、降级要求等常在这里，install_instructions 常常只是「去主页看」）
+    std::pmr::string changelog;    // 本修订的更新日志（Markdown）
     std::pmr::vector<CollectionModRow> mods;  // 按安装顺序
+};
+struct CollectionReadmeData {
+    std::pmr::string name;
+    std::pmr::string slug;
+    std::int64_t revision = 0;
+    std::pmr::string url;
+    std::pmr::string summary;
+    std::pmr::string description;
+    std::pmr::string changelog;
+    std::pmr::string markdown;  // 拼好的完整 README（标题、链接、简介、说明、更新日志）
+    bool cached = false;        // true = 离线，读的是实例里缓存的 readme-<rev>.md（此时只有 markdown 字段）
 };
 struct CollectionOutcomeRow {
     std::pmr::string key;
@@ -565,6 +593,10 @@ struct RunData {
     std::size_t captured = 0;  // 移回 overwrite 的文件数（启动前残留 + 退出后）
     std::pmr::vector<std::pmr::string> argv;
     std::pmr::string cwd;
+    bool cow = false;              // 注入了写时复制（libmol-cow.so）
+    std::pmr::string cow_library;  // 注入的库；空 = 没有启用（--no-cow 或找不到库）
+    std::size_t cow_copies = 0;    // 本次运行中被换成副本的农场链接数（含只读打开写模式、最后没改的）
+    std::size_t cow_reflinked = 0; // 其中走 reflink 的（btrfs/xfs 上应等于 cow_copies；ext4 上为 0）
 };
 
 // ---- plan / status / apply / unlink ---------------------------------------

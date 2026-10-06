@@ -139,7 +139,8 @@ bool set_mod_enabled(const Instance& inst, std::string_view name, bool enabled, 
 bool move_mod(const Instance& inst, std::string_view name, std::size_t to_priority, std::string_view profile = {});
 
 // 农场的期望内容：层 0 = 游戏本体（prefix ""），其后是 profile 中**启用且存在**的 mod（低→高，prefix "Data"，
-// 分隔符跳过），最后一层是 overwrite（prefix "Data"，目录不存在则无该层）。
+// 分隔符跳过），然后是 overwrite（prefix "Data"），最后是 <实例>/overwrite-root（prefix ""，农场根层面的覆盖；
+// 后两者目录不存在则无该层）。
 struct FarmModel {
     using allocator_type = mol::allocator_type;
     vector<string> layer_names;  // 与 layer 序号一一对应：层 0 为 "<game>"，overwrite 为 "<overwrite>"

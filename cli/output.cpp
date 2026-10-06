@@ -140,6 +140,19 @@ std::pmr::vector<std::pmr::string> render_text(const Result& r, mol::mr* mem) {
             if (adata::boolean(st, "confirm")) line += "   [confirm first]";
             add(lines, line, mem);
         }
+    } else if (cmd == "docs") {
+        if (!S(r.data, "topic").empty()) {
+            add(lines, S(r.data, "markdown"), mem);
+        } else {
+            add(lines, "built-in documentation (mo-linux docs TOPIC):", mem);
+            for (const auto& t : r.data.object().find("topics").second().array()) {
+                std::string name = S(t, "name");
+                name.resize(10, ' ');
+                add(lines, "  " + name + S(t, "title"), mem);
+            }
+        }
+    } else if (cmd == "collection readme") {
+        add(lines, S(r.data, "markdown"), mem);
     } else if (cmd == "schema") {
         for (const auto& c : r.data.object().find("commands").second().array()) add(lines, S(c, "name") + " - " + S(c, "summary"), mem);
     } else if (cmd == "logs") {

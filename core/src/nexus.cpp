@@ -259,13 +259,13 @@ NexusCollectionRev NexusClient::collection_revision(std::string_view domain, std
     for (char c : slug)
         if (!(std::isalnum(static_cast<unsigned char>(c)) || c == '-' || c == '_')) throw Error("invalid_argument", "bad collection slug: " + std::string(slug));
     const std::string d = json_escape(domain), sl = json_escape(slug);
-    const char* fields = "revisionNumber modCount totalSize downloadLink adultContent gameVersions{reference}";
+    const char* fields = "revisionNumber modCount totalSize downloadLink adultContent gameVersions{reference} collectionChangelog{description}";
     std::string query;
     if (revision <= 0)
-        query = "{collection(slug:\"" + sl + "\",domainName:\"" + d + "\",viewAdultContent:true){name slug latestPublishedRevision{" + fields + "}}}";
+        query = "{collection(slug:\"" + sl + "\",domainName:\"" + d + "\",viewAdultContent:true){name slug summary description latestPublishedRevision{" + fields + "}}}";
     else
         query = "{collectionRevision(slug:\"" + sl + "\",revision:" + std::to_string(revision) + ",domainName:\"" + d +
-                "\",viewAdultContent:true){" + fields + " collection{name slug}}}";
+                "\",viewAdultContent:true){" + fields + " collection{name slug summary description}}}";
     const string gbody = graphql(query, mem);
     alib6::AData doc(mem);
     if (!doc.load_from_memory(gbody) || !doc.is_object()) bad_json("collection");
@@ -273,12 +273,14 @@ NexusCollectionRev NexusClient::collection_revision(std::string_view domain, std
     auto data = top.find("data");
     if (data == top.end() || !data.second().is_object()) bad_json("collection (no data)");
     const alib6::AData* rev = nullptr;
-    std::string cname, cslug;
+    std::string cname, cslug, csummary, cdesc;
     if (revision <= 0) {
         auto c = data.second().object().find("collection");
         if (c == data.second().object().end() || !c.second().is_object()) throw Error("nexus_not_found", "collection not found: " + std::string(slug));
         cname = str_of(c.second(), "name");
         cslug = str_of(c.second(), "slug");
+        csummary = str_of(c.second(), "summary");
+        cdesc = str_of(c.second(), "description");
         auto lr = c.second().object().find("latestPublishedRevision");
         if (lr == c.second().object().end() || !lr.second().is_object()) throw Error("nexus_not_found", "collection has no published revision: " + std::string(slug));
         rev = &lr.second();
@@ -289,6 +291,8 @@ NexusCollectionRev NexusClient::collection_revision(std::string_view domain, std
         if (auto cc = rev->object().find("collection"); cc != rev->object().end() && cc.second().is_object()) {
             cname = str_of(cc.second(), "name");
             cslug = str_of(cc.second(), "slug");
+            csummary = str_of(cc.second(), "summary");
+            cdesc = str_of(cc.second(), "description");
         }
     }
     NexusCollectionRev out(mem);
@@ -303,6 +307,10 @@ NexusCollectionRev NexusClient::collection_revision(std::string_view domain, std
         out.total_size = ts.empty() ? int_of(*rev, "totalSize") : v;
     }
     out.download_path = string(str_of(*rev, "downloadLink"), mem);
+    out.summary = string(csummary, mem);
+    out.description = string(cdesc, mem);
+    if (auto cl = rev->object().find("collectionChangelog"); cl != rev->object().end() && cl.second().is_object())
+        out.changelog = string(str_of(cl.second(), "description"), mem);
     out.adult = bool_of(*rev, "adultContent");
     if (auto gv = rev->object().find("gameVersions"); gv != rev->object().end() && gv.second().is_array())
         for (const auto& g : gv.second().array()) if (g.is_object()) out.game_versions.push_back(string(str_of(g, "reference"), mem));

@@ -84,9 +84,17 @@ struct NexusCollectionRev {
     string download_path;  // 相对 API 根的路径，经 collection_archive_url 换成可下载地址
     vector<string> game_versions;
     bool adult = false;
-    explicit NexusCollectionRev(allocator_type a = {}) : name(a), slug(a), download_path(a), game_versions(a) {}
-    NexusCollectionRev(const NexusCollectionRev& o, allocator_type a) : name(o.name, a), slug(o.slug, a), revision_number(o.revision_number), mod_count(o.mod_count), total_size(o.total_size), download_path(o.download_path, a), game_versions(o.game_versions, a), adult(o.adult) {}
-    NexusCollectionRev(NexusCollectionRev&& o, allocator_type a) : name(std::move(o.name), a), slug(std::move(o.slug), a), revision_number(o.revision_number), mod_count(o.mod_count), total_size(o.total_size), download_path(std::move(o.download_path), a), game_versions(std::move(o.game_versions), a), adult(o.adult) {}
+    // 集合页面上作者写的说明（Markdown；安装须知、降级要求、可选项……清单里的 installInstructions 常常只是「去主页看」）
+    string summary, description;
+    string changelog;  // 本修订的更新日志（Markdown）
+    explicit NexusCollectionRev(allocator_type a = {}) : name(a), slug(a), download_path(a), game_versions(a), summary(a), description(a), changelog(a) {}
+    NexusCollectionRev(const NexusCollectionRev& o, allocator_type a)
+        : name(o.name, a), slug(o.slug, a), revision_number(o.revision_number), mod_count(o.mod_count), total_size(o.total_size), download_path(o.download_path, a),
+          game_versions(o.game_versions, a), adult(o.adult), summary(o.summary, a), description(o.description, a), changelog(o.changelog, a) {}
+    NexusCollectionRev(NexusCollectionRev&& o, allocator_type a)
+        : name(std::move(o.name), a), slug(std::move(o.slug), a), revision_number(o.revision_number), mod_count(o.mod_count), total_size(o.total_size),
+          download_path(std::move(o.download_path), a), game_versions(std::move(o.game_versions), a), adult(o.adult), summary(std::move(o.summary), a),
+          description(std::move(o.description), a), changelog(std::move(o.changelog), a) {}
     NexusCollectionRev(const NexusCollectionRev&) = default;
     NexusCollectionRev(NexusCollectionRev&&) = default;
     NexusCollectionRev& operator=(const NexusCollectionRev&) = default;

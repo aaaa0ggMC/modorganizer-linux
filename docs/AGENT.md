@@ -27,6 +27,7 @@ mo-linux -j doctor                              # what is wrong, with machine-re
 mo-linux -j nexus whoami                        # is there an API key? (see "credentials")
 mo-linux -j skse install                        # the SKSE64 build matching the game version
 mo-linux -j collection search "essential"       # or: nexus search "skyui"
+mo-linux collection readme SLUG                 # READ THIS FIRST: the author's instructions (game version, downgrade, options)
 mo-linux -j collection install SLUG             # resumable; exit 4 means pending decisions
 mo-linux -j plugins list                        # load order + master problems
 mo-linux -j apply && mo-linux -j plugins sync
@@ -44,6 +45,9 @@ mo-linux never asks questions mid-run. Anything that needs a decision is recorde
 | `fomod_choices` | The archive has a FOMOD installer and no choices were supplied | `mo-linux -j fomod inspect ARCHIVE` → pick (or accept defaults) → `collection resolve … --fomod FILE` / `--fomod-defaults`, or re-run `nexus install … --fomod FILE` |
 | `manual_download` | Free Nexus account, browser-only or manual source | Give the user `url`; they click download and send you an `nxm://` link → `collection resolve … --nxm LINK` (or `--archive FILE`) |
 | `unsupported` | Binary patches or bundled sources | `collection resolve … --skip`, or supply an archive with `--archive` |
+| `skse` | The collection lists SKSE64 from skse.silverlock.org | `mo-linux -j skse install`, then re-run `collection install` |
+
+**Before installing a collection, read its page description** (`collection readme SLUG`, or `description` in `collection inspect`). The manifest's `install_instructions` is often just "see the main page"; the real requirements — a specific game version (compare `game_versions` with the local `game_version`), a downgrade, an ENB, optional mods to pick, tools to run afterwards — are only on the page. Summarise them for the user and ask before doing anything they require outside mo-linux. The README is cached as `collections/<slug>/readme-<rev>.md`, so it is available offline.
 
 Then run the **same command again**. Finished mods are not redone; downloaded archives are found by size + md5.
 
@@ -94,4 +98,20 @@ Same incomplete protocol: `manual_download` rows (Mega, MediaFire, Google Drive,
 
 ## Known limits
 
-LOOT-style sorting is approximate (`plugins sort --loot` applies the community masterlist's after/req rules and groups; conditions, userlists and overlap heuristics are not implemented). Plain `plugins sort` only puts masters first. Wabbajack: `CreateBSA`/`TransformedTexture`/`MergedPatch` directives are not executed (reported as `unsupported`); `wabbajack inspect` tells you up front whether a list is `full`/`partial`/`none` installable. Collections: `requires`/`conflicts` rules are reported, not enforced; bundled sources and binary patches are `unsupported`. Writes by the game *through* an existing symlink land in the original file (see HANDBOOK R13).
+LOOT-style sorting is approximate (`plugins sort --loot` applies the community masterlist's after/req rules and groups; conditions, userlists and overlap heuristics are not implemented). Plain `plugins sort` only puts masters first. Wabbajack: `CreateBSA`/`TransformedTexture`/`MergedPatch` directives are not executed (reported as `unsupported`); `wabbajack inspect` tells you up front whether a list is `full`/`partial`/`none` installable. Collections: `requires`/`conflicts` rules are reported, not enforced; bundled sources and binary patches are `unsupported`. Tool and game runs are copy-on-write by default (see below); with `--no-cow`, writes *through* an existing symlink land in the original file.
+
+## Running Windows tools inside the virtual game dir (downgrade patchers, xEdit, BodySlide…)
+
+`mo-linux -j run --exe REL [--args "…"]` runs any exe that is in the farm (`REL` is relative to the farm root: a root mod's `Patcher.exe`, `Data/Tools/x.exe`). Confirm with the user first (it is a `run`). The run is **copy-on-write**: the tool sees the merged game, may modify/delete/move any file, and none of that touches the real game directory or mod folders:
+
+- modified files → copied (reflink on btrfs/xfs) and collected into `overwrite/` (`Data/…`) or `overwrite-root/` (game root, e.g. a downgraded `SkyrimSE.exe`), which win over everything after the next `apply`;
+- deleted/moved files → only the link disappears for that run; the next `apply` brings the original back (no "whiteouts");
+- `data.cow_copies` tells you how many files were copied. To undo a tool's result, delete the files from `overwrite-root/` / `overwrite/` and `apply`.
+
+Typical downgrade (e.g. "1.7.104 → 1.6.1170 Downgrade Patcher"): `mods install` the patcher archive (it is a root mod if it contains an exe) → `apply` → `run --exe "<Patcher>.exe"` (+ `--args` if it takes any) → check `game info` / `doctor` for the new version. Steam may still update the real game later; it does not matter, the farm keeps using `overwrite-root/`.
+
+Limits: 32-bit Wine processes do not get the 64-bit hook (no COW for them); tools started *outside* the farm (absolute `binary` from `executables list`) do not see the virtual Data dir.
+
+## Built-in documentation
+
+`mo-linux docs` lists the documents compiled into the binary; `mo-linux docs agent` (or `guide`, `cli`, `handbook`) prints one in full, so you never need the source tree.

@@ -1,6 +1,11 @@
 // run：capture 上次残留 → plugins sync → apply 农场 → onAboutToRun → 启动 → 退出后 capture overwrite。
 // 会写 profile、前缀 AppData 与农场，并真正启动游戏（--dry-run 只输出将要执行的命令，不碰进程）。
+// 默认注入写时复制（libmol-cow.so）：游戏/工具以写方式打开农场里的文件时先换成副本，原文件永远不动；
+// 退出后改过的副本收进 overwrite（Data/ 下）或 overwrite-root（根目录，作为最高层参与合并）。
+// 游戏层库（Qt）只在启动游戏本体时必需；其它工具（降级补丁、BodySlide……）没有它也能跑，只是不同步 plugins.txt。
 // 混用约束：所有 #include 在 import 之前（详见 cli/cmd_common.hpp 文件头）。
+#include <optional>
+
 #include "mol/casefold.hpp"
 #include "mol/executables.hpp"
 #include "mol/game_host.hpp"
@@ -38,8 +43,17 @@ Result run_run(Context& ctx) {
         exe = hit->farm_path.empty() ? hit->binary : hit->farm_path;
         tool_args = mol::split_arguments(hit->arguments, ctx.mem);
     }
-    const auto host = mol::GameHost::open();
-    const auto game = host.create(inst.cfg.game, inst.cfg.game_dir, inst.cfg.prefix, inst.cfg.prefix_user);
+    // 游戏本体（或 SKSE 加载器）必须有游戏层；其它工具没有也行
+    const std::string exe_name = std::string(mol::casefold(std::string_view(exe).substr(std::string_view(exe).find_last_of("/\\") == std::string_view::npos ? 0 : std::string_view(exe).find_last_of("/\\") + 1)));
+    const bool is_game = exe_name == "skyrimse.exe" || exe_name == "skse64_loader.exe";
+    std::optional<mol::GameHost> host;
+    std::optional<mol::Game> game;
+    try {
+        host.emplace(mol::GameHost::open());
+        game.emplace(host->create(inst.cfg.game, inst.cfg.game_dir, inst.cfg.prefix, inst.cfg.prefix_user));
+    } catch (const mol::Error& e) {
+        if (is_game || e.code != "game_unavailable") throw;
+    }
 
     if (!dry) mol::require_farm_idle(inst);
     std::size_t captured_before = 0;
@@ -51,8 +65,10 @@ Result run_run(Context& ctx) {
             for (const auto& n : forced_plugin_names(ctx, inst)) forced.emplace_back(n, ctx.mem);
             mol::save_plugins(inst, mol::load_plugins(inst, forced, ctx.profile_override(), ctx.mem), ctx.profile_override());
         }
-        mol::sync_plugins(inst, game, ctx.mem);
-        synced = true;
+        if (game) {
+            mol::sync_plugins(inst, *game, ctx.mem);
+            synced = true;
+        }
     }
     const mol::FarmModel model = mol::build_farm_model(inst, ctx.profile_override(), ctx.mem);
     const mol::Plan plan = mol::plan_instance(inst, model, ctx.mem);
@@ -72,17 +88,30 @@ Result run_run(Context& ctx) {
     if (!exe_found)
         throw mol::Error("mod_not_found", "executable not found in the farm: " + std::string(exe), std::string(exe));
 
+    if (ctx.args.has("--args")) {
+        if (!title.empty()) return make_usage_error("run: --args cannot be combined with --title (the registered executable has its own arguments)", ctx);
+        tool_args = mol::split_arguments(ctx.args.get("--args", "", ctx.mem), ctx.mem);
+    }
     std::vector<std::string_view> arg_views;
     for (const auto& a : tool_args) arg_views.push_back(a);
     mol::LaunchOptions lo;
     lo.args = arg_views;
+    const mol::string cow_lib = ctx.args.get_bool("--no-cow", false) ? mol::string(ctx.mem) : mol::find_cow_library(ctx.mem);
+    const std::string cow_log = mol::cow_log_path(inst);
+    lo.cow_library = cow_lib;
+    lo.cow_log = cow_log;
     mol::LaunchSpec spec = mol::build_launch(inst, exe, lo, ctx.mem);
     int game_exit = 0;
     std::size_t captured_after = 0;
+    mol::CowStats cow;
     if (!dry) {
-        if (!game.about_to_run(exe)) throw mol::Error("game_unavailable", "an onAboutToRun handler refused to run", std::string(exe));
+        if (game && !game->about_to_run(exe)) throw mol::Error("game_unavailable", "an onAboutToRun handler refused to run", std::string(exe));
+        mol::ensure_wineserver_cow(inst, cow_lib);
         game_exit = mol::spawn_launch(spec, !detach);
-        if (!detach) captured_after = mol::capture_overwrite(inst);
+        if (!detach) {
+            cow = mol::cow_stats(inst);
+            captured_after = mol::capture_overwrite(inst);
+        }
     }
 
     RunData d{.exe = mol::string(exe, ctx.mem),
@@ -93,12 +122,18 @@ Result run_run(Context& ctx) {
               .game_exit_code = game_exit,
               .captured = captured_before + captured_after,
               .argv = std::pmr::vector<std::pmr::string>(ctx.mem),
-              .cwd = mol::string(spec.cwd, ctx.mem)};
+              .cwd = mol::string(spec.cwd, ctx.mem),
+              .cow = !cow_lib.empty(),
+              .cow_library = mol::string(cow_lib, ctx.mem),
+              .cow_copies = cow.copies,
+              .cow_reflinked = cow.reflinked};
     for (const auto& a : spec.argv) d.argv.push_back(std::pmr::string(a, ctx.mem));
     Result r(ctx.mem);
     r.ok = true;
     r.exit_code = 0;
     r.command = ctx.command;
+    if (cow_lib.empty() && !ctx.args.get_bool("--no-cow", false))
+        r.add_warning("cow_unavailable", "libmol-cow.so not found next to mo-linux (or $MOL_COW_LIB): writes to existing files went through to the originals", "");
     r.set_data(std::move(d));
     return r;
 }

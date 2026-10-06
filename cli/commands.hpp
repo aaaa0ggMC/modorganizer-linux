@@ -10,6 +10,7 @@
 namespace cli {
 
 Result run_version(Context&);
+Result run_docs(Context&);
 Result run_game_info(Context&);
 Result run_plugins_sync(Context&);
 Result run_plugins_list(Context&);
@@ -34,6 +35,7 @@ NextData next_data(Context& ctx, const mol::Instance* inst, const mol::vector<mo
 Result run_logs(Context&);
 Result run_collection_inspect(Context&);
 Result run_collection_install(Context&);
+Result run_collection_readme(Context&);
 Result run_collection_status(Context&);
 Result run_collection_resolve(Context&);
 Result run_fomod_inspect(Context&);

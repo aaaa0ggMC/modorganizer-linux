@@ -20,6 +20,7 @@ struct RouteEntry {
 inline constexpr RouteEntry kRoutes[] = {
     {"version", "version", &cli::run_version, {}, 0, ""},
     {"schema", "schema", &cli::run_schema, {}, 0, ""},
+    {"docs", "docs", &cli::run_docs, {}, 1, "[TOPIC]"},
     {"next", "next", &cli::run_next, {}, 0, ""},
     {"overview", "overview", &cli::run_overview, {}, 0, ""},
     {"logs", "logs", &cli::run_logs, cli::kOptLogs, 0, ""},
@@ -44,6 +45,7 @@ inline constexpr RouteEntry kRoutes[] = {
     {"nexus/download", "nexus download", &cli::run_nexus_download, cli::kOptNexusDownload, 0, ""},
     {"skse/install", "skse install", &cli::run_skse_install, {}, 0, ""},
     {"collection/inspect", "collection inspect", &cli::run_collection_inspect, cli::kOptCollectionInspect, 1, "COLLECTION"},
+    {"collection/readme", "collection readme", &cli::run_collection_readme, cli::kOptCollectionInspect, 1, "COLLECTION"},
     {"collection/install", "collection install", &cli::run_collection_install, cli::kOptCollectionInstall, 1, "COLLECTION"},
     {"collection/status", "collection status", &cli::run_collection_status, {}, 1, "COLLECTION"},
     {"collection/resolve", "collection resolve", &cli::run_collection_resolve, cli::kOptCollectionResolve, 1, "COLLECTION"},
@@ -90,6 +92,7 @@ struct CommandMeta {
 
 inline constexpr CommandMeta kMeta[] = {
     {"version", "Print the tool version", "read", "", false, true},
+    {"docs", "Print the documentation compiled into the binary: no TOPIC lists them, `docs guide|agent|cli|handbook|readme` prints one in full", "read", "", false, true},
     {"schema", "Describe every command, option, effect and error code as JSON (start here)", "read", "", false, true},
     {"next", "Inspect the instance and list the recommended next commands", "read", "", false, true},
     {"overview", "Everything a dashboard needs in one call: instance, game version, doctor, next steps, mod/plugin counts, collections", "read", "", false, true},
@@ -136,7 +139,8 @@ inline constexpr CommandMeta kMeta[] = {
     {"wabbajack inspect", "Analyse a mod list: sources, directive types and how much of it mo-linux can install", "network", "", false, true},
     {"wabbajack install", "Rebuild the mod list's instance in -i DIR; resumable, exit 4 when it needs input", "instance,network", "nexus_key", true, true},
     {"collection search", "Search Nexus collections for this game", "network", "instance,nexus_key", false, true},
-    {"collection inspect", "Show a collection's mods, order and status", "network", "instance,nexus_key", false, true},
+    {"collection inspect", "Show a collection's mods, order, status and its page description (README)", "network", "instance,nexus_key", false, true},
+    {"collection readme", "Show the collection page's description (the author's README: requirements, downgrade steps, options) as Markdown; read it before installing", "network", "nexus_key", false, true},
     {"collection install", "Install a collection; resumable, returns exit 4 when it needs input", "instance,network", "instance,nexus_key", false, true},
     {"collection status", "Show the stored state of a collection install", "read", "instance", false, true},
     {"collection resolve", "Record a decision for a pending collection mod", "instance,network", "instance", false, true},
