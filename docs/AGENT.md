@@ -27,6 +27,7 @@ mo-linux -j doctor                              # what is wrong, with machine-re
 mo-linux -j nexus whoami                        # is there an API key? (see "credentials")
 mo-linux -j skse install                        # the SKSE64 build matching the game version
 mo-linux -j collection search "essential"       # or: nexus search "skyui"
+mo-linux collection readme SLUG                 # READ THIS FIRST: the author's instructions (game version, downgrade, options)
 mo-linux -j collection install SLUG             # resumable; exit 4 means pending decisions
 mo-linux -j plugins list                        # load order + master problems
 mo-linux -j apply && mo-linux -j plugins sync
@@ -44,6 +45,9 @@ mo-linux never asks questions mid-run. Anything that needs a decision is recorde
 | `fomod_choices` | The archive has a FOMOD installer and no choices were supplied | `mo-linux -j fomod inspect ARCHIVE` → pick (or accept defaults) → `collection resolve … --fomod FILE` / `--fomod-defaults`, or re-run `nexus install … --fomod FILE` |
 | `manual_download` | Free Nexus account, browser-only or manual source | Give the user `url`; they click download and send you an `nxm://` link → `collection resolve … --nxm LINK` (or `--archive FILE`) |
 | `unsupported` | Binary patches or bundled sources | `collection resolve … --skip`, or supply an archive with `--archive` |
+| `skse` | The collection lists SKSE64 from skse.silverlock.org | `mo-linux -j skse install`, then re-run `collection install` |
+
+**Before installing a collection, read its page description** (`collection readme SLUG`, or `description` in `collection inspect`). The manifest's `install_instructions` is often just "see the main page"; the real requirements — a specific game version (compare `game_versions` with the local `game_version`), a downgrade, an ENB, optional mods to pick, tools to run afterwards — are only on the page. Summarise them for the user and ask before doing anything they require outside mo-linux. The README is cached as `collections/<slug>/readme-<rev>.md`, so it is available offline.
 
 Then run the **same command again**. Finished mods are not redone; downloaded archives are found by size + md5.
 

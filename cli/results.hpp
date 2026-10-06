@@ -287,7 +287,22 @@ struct CollectionInspectData {
     std::int64_t plugin_count = 0;
     std::int64_t rule_count = 0;
     std::pmr::string install_instructions;
+    std::pmr::string url;          // 集合页面
+    std::pmr::string summary;      // 页面上的一句话简介
+    std::pmr::string description;  // 页面说明（Markdown；作者的安装须知、降级要求等常在这里，install_instructions 常常只是「去主页看」）
+    std::pmr::string changelog;    // 本修订的更新日志（Markdown）
     std::pmr::vector<CollectionModRow> mods;  // 按安装顺序
+};
+struct CollectionReadmeData {
+    std::pmr::string name;
+    std::pmr::string slug;
+    std::int64_t revision = 0;
+    std::pmr::string url;
+    std::pmr::string summary;
+    std::pmr::string description;
+    std::pmr::string changelog;
+    std::pmr::string markdown;  // 拼好的完整 README（标题、链接、简介、说明、更新日志）
+    bool cached = false;        // true = 离线，读的是实例里缓存的 readme-<rev>.md（此时只有 markdown 字段）
 };
 struct CollectionOutcomeRow {
     std::pmr::string key;

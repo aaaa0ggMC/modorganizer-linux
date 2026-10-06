@@ -3,6 +3,7 @@
 // 混用约束：所有 #include 在 import 之前（详见 cli/cmd_common.hpp 文件头）。
 #include <filesystem>
 #include <fstream>
+#include <optional>
 #include <iterator>
 
 #include "mol/casefold.hpp"
@@ -32,8 +33,9 @@ struct Ref {
     std::string domain, slug, local;  // local 非空 = 本地 collection.json / 压缩包
 };
 
-// slug | https://www.nexusmods.com/games/<domain>/collections/<slug>[/…] | 本地文件
-Ref parse_ref(std::string_view s, const mol::Instance& inst) {
+// slug | https://www.nexusmods.com/games/<domain>/collections/<slug>[/…]
+//      | https://next.nexusmods.com/<domain>/collections/<slug>[/…]（集合页面、README 里常见的写法）| 本地文件
+Ref parse_ref(std::string_view s, std::string_view default_domain) {
     Ref r;
     std::error_code ec;
     if (fs::is_regular_file(std::string(s), ec)) {
@@ -44,10 +46,14 @@ Ref parse_ref(std::string_view s, const mol::Instance& inst) {
     std::string x(s);
     if (auto q = x.find_first_of("?#"); q != std::string::npos) x.erase(q);
     if (x.rfind("http", 0) == 0) {
-        const auto g = x.find("/games/");
         const auto c = x.find("/collections/");
-        if (g == std::string::npos || c == std::string::npos || c < g) throw mol::Error("invalid_argument", "unrecognised collection URL: " + std::string(s));
-        r.domain = x.substr(g + 7, c - (g + 7));
+        const auto host_end = x.find('/', x.find("://") == std::string::npos ? 0 : x.find("://") + 3);
+        if (c == std::string::npos || host_end == std::string::npos || c <= host_end) throw mol::Error("invalid_argument", "unrecognised collection URL: " + std::string(s));
+        // 域名 = "/collections/" 前面那一段（"/games/<domain>" 或 "/<domain>"）
+        const std::string before = x.substr(host_end, c - host_end);
+        const auto slash = before.rfind('/');
+        r.domain = slash == std::string::npos ? before : before.substr(slash + 1);
+        if (r.domain == "games" || r.domain.empty()) throw mol::Error("invalid_argument", "unrecognised collection URL: " + std::string(s));
         std::string rest = x.substr(c + 13);
         if (auto sl = rest.find('/'); sl != std::string::npos) rest.erase(sl);
         r.slug = rest;
@@ -55,12 +61,20 @@ Ref parse_ref(std::string_view s, const mol::Instance& inst) {
         r.slug = x;
     }
     if (r.slug.empty()) throw mol::Error("invalid_argument", "empty collection slug");
-    if (r.domain.empty()) r.domain = std::string(mol::nexus_game_domain(inst.cfg.game));
+    if (r.domain.empty()) r.domain = std::string(default_domain);
     return r;
 }
+Ref parse_ref(std::string_view s, const mol::Instance& inst) { return parse_ref(s, mol::nexus_game_domain(inst.cfg.game)); }
+
+// 集合页面的说明（作者写的 README）。在线取到时同时缓存成 <集合目录>/readme-<rev>.md，离线也能读。
+struct Readme {
+    std::string summary, description, changelog, url;
+};
+std::string page_url_of(const Ref& ref) { return "https://next.nexusmods.com/" + ref.domain + "/collections/" + ref.slug; }
 
 struct Loaded {
     col::Collection coll;
+    Readme readme;
     std::string slug;
     std::int64_t revision = 0;
     std::int64_t total_size = 0;
@@ -82,6 +96,24 @@ std::string unpack_manifest(const std::string& archive, const fs::path& into) {
     const fs::path j = into / "collection.json";
     if (!fs::exists(j, ec)) throw mol::Error("invalid_argument", "the collection archive has no collection.json", archive);
     return read_file(j);
+}
+
+std::string readme_markdown(std::string_view name, std::int64_t revision, const Readme& r) {
+    std::string md = "# " + std::string(name) + "\n\n";
+    if (!r.url.empty()) md += "<" + r.url + ">\n\n";
+    if (!r.summary.empty()) md += "> " + r.summary + "\n\n";
+    md += r.description.empty() ? std::string("(the collection page has no description)\n") : r.description + "\n";
+    if (!r.changelog.empty()) md += "\n---\n\n## Changelog (revision " + std::to_string(revision) + ")\n\n" + r.changelog + "\n";
+    return md;
+}
+
+void save_readme(const std::string& dir, std::int64_t revision, const Readme& r, std::string_view name) {
+    if (dir.empty() || (r.description.empty() && r.summary.empty())) return;
+    std::error_code ec;
+    fs::create_directories(dir, ec);
+    const fs::path f = fs::path(dir) / ("readme-" + std::to_string(revision) + ".md");
+    std::ofstream os(f, std::ios::binary | std::ios::trunc);
+    if (os) os << readme_markdown(name, revision, r);  // 缓存失败不影响命令本身
 }
 
 Loaded load_remote(Context& ctx, const mol::Instance& inst, const Ref& ref, std::int64_t revision) {
@@ -112,6 +144,8 @@ Loaded load_remote(Context& ctx, const mol::Instance& inst, const Ref& ref, std:
         l.coll = col::parse_collection(unpack_manifest(dest, unpacked));
     }
     if (l.coll.info.name.empty()) l.coll.info.name = std::string(rev.name);
+    l.readme = Readme{std::string(rev.summary), std::string(rev.description), std::string(rev.changelog), page_url_of(ref)};
+    save_readme(l.dir, rev.revision_number, l.readme, rev.name);
     return l;
 }
 
@@ -173,13 +207,64 @@ Result run_collection_inspect(Context& ctx) {
                             .game_versions = std::pmr::vector<std::pmr::string>(ctx.mem), .game_version = P(game_info_string(ctx, inst, "version"), ctx.mem),
                             .mod_count = static_cast<std::int64_t>(l.coll.mods.size()), .total_size = l.total_size,
                             .plugin_count = static_cast<std::int64_t>(l.coll.plugins.size()), .rule_count = static_cast<std::int64_t>(l.coll.rules.size()),
-                            .install_instructions = P(l.coll.info.install_instructions, ctx.mem), .mods = std::pmr::vector<CollectionModRow>(ctx.mem)};
+                            .install_instructions = P(l.coll.info.install_instructions, ctx.mem), .url = P(l.readme.url, ctx.mem),
+                            .summary = P(l.readme.summary, ctx.mem), .description = P(l.readme.description, ctx.mem),
+                            .changelog = P(l.readme.changelog, ctx.mem), .mods = std::pmr::vector<CollectionModRow>(ctx.mem)};
     for (const auto& v : l.coll.info.game_versions) d.game_versions.push_back(P(v, ctx.mem));
     for (const std::size_t i : col::install_order(l.coll)) {
         const auto& m = l.coll.mods[i];
         d.mods.push_back(CollectionModRow{.key = P(m.key(), ctx.mem), .name = P(m.name, ctx.mem), .version = P(m.version, ctx.mem), .optional = m.optional,
                                           .source_type = P(m.source.type, ctx.mem), .mod_id = m.source.mod_id, .file_id = m.source.file_id,
                                           .has_fomod_choices = m.has_choices, .has_patches = m.has_patches, .status = P(status_of(st, m.key()), ctx.mem)});
+    }
+    Result r = ok(ctx);
+    r.set_data(std::move(d));
+    return r;
+}
+
+// collection readme：集合页面的说明（Markdown）。不需要实例；在线取不到时读实例里缓存的 readme-<rev>.md。
+Result run_collection_readme(Context& ctx) {
+    if (!ctx.args.ok()) return make_usage_error(ctx.args.error, ctx);
+    std::optional<mol::Instance> inst;
+    try {
+        inst = mol::load_instance(ctx.instance_dir, ctx.profile_override(), ctx.mem);
+    } catch (const mol::Error& e) {
+        if (e.code != "instance_not_found") throw;
+    }
+    const Ref ref = inst ? parse_ref(ctx.args.positionals.front(), *inst) : parse_ref(ctx.args.positionals.front(), search_domain(ctx));
+    if (!ref.local.empty()) return make_usage_error("collection readme: give a slug or a collection URL (a local manifest has no page)", ctx);
+    std::int64_t revision = 0;
+    if (ctx.args.has("--revision") && !parse_int(ctx.args.get("--revision", "", ctx.mem), revision))
+        return make_usage_error("collection readme: --revision needs a positive integer", ctx);
+
+    CollectionReadmeData d{.name = P("", ctx.mem), .slug = P(ref.slug, ctx.mem), .url = P(page_url_of(ref), ctx.mem), .summary = P("", ctx.mem),
+                           .description = P("", ctx.mem), .changelog = P("", ctx.mem), .markdown = P("", ctx.mem), .cached = false};
+    try {
+        const auto rev = make_client().collection_revision(ref.domain, ref.slug, revision, ctx.mem);
+        const Readme rd{std::string(rev.summary), std::string(rev.description), std::string(rev.changelog), page_url_of(ref)};
+        if (inst) save_readme(col::collection_dir(*inst, ref.slug), rev.revision_number, rd, rev.name);
+        d.name = P(rev.name, ctx.mem);
+        d.revision = rev.revision_number;
+        d.summary = P(rd.summary, ctx.mem);
+        d.description = P(rd.description, ctx.mem);
+        d.changelog = P(rd.changelog, ctx.mem);
+        d.markdown = P(readme_markdown(rev.name, rev.revision_number, rd), ctx.mem);
+    } catch (const mol::Error& e) {
+        // 离线/没有 key：退回缓存（取最新的修订）
+        if (!inst || (e.code != "network_error" && e.code != "nexus_auth")) throw;
+        std::error_code ec;
+        fs::path best;
+        std::int64_t best_rev = -1;
+        for (fs::directory_iterator it(fs::path(col::collection_dir(*inst, ref.slug)), ec), end; !ec && it != end; it.increment(ec)) {
+            const std::string n = it->path().filename().string();
+            std::int64_t rv = 0;
+            if (n.rfind("readme-", 0) != 0 || n.size() < 11 || !parse_int(n.substr(7, n.size() - 10), rv)) continue;
+            if ((revision > 0 && rv == revision) || (revision <= 0 && rv > best_rev)) { best = it->path(); best_rev = rv; }
+        }
+        if (best.empty()) throw;
+        d.revision = best_rev;
+        d.markdown = P(read_file(best), ctx.mem);
+        d.cached = true;
     }
     Result r = ok(ctx);
     r.set_data(std::move(d));

@@ -157,6 +157,12 @@ with tempfile.TemporaryDirectory(prefix='mol-cli-res-', dir='/tmp') as tmp_r:
     st, _ = call('-j', '-i', str(ri), 'collection', 'status', 'abc', code=4)
     p0 = st['data']['pending'][0]
     assert (p0['kind'], p0['url'], p0['decision'], p0['archive']) == ('fomod_choices', 'https://example.invalid/m/1', '', ''), p0
+    # collection readme：没有 key（测试 HOME 下）时读实例里缓存的 readme
+    (ri / 'collections/abc/readme-1.md').write_text('# ABC\n\nDowngrade to 1.6.1170 first.\n')
+    rd, _ = call('-j', '-i', str(ri), 'collection', 'readme', 'https://next.nexusmods.com/skyrimspecialedition/collections/abc', env=dict(os.environ, NEXUS_API_KEY=''))
+    assert rd['data']['cached'] is True and 'Downgrade' in rd['data']['markdown'], rd
+    r = subprocess.run([exe, '-i', str(ri), 'collection', 'readme', 'abc'], text=True, capture_output=True, env=dict(os.environ, NEXUS_API_KEY=''))
+    assert r.returncode == 0 and r.stdout.startswith('# ABC'), (r.returncode, r.stdout, r.stderr)
     data, _ = call('-j', '-i', str(ri), 'collection', 'resolve', 'abc', '--mod', 'T1', '--fomod-defaults')
     assert data['data']['recorded'] == 'fomod_defaults', data
     st, _ = call('-j', '-i', str(ri), 'collection', 'status', 'abc', code=4)
