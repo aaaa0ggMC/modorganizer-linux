@@ -57,6 +57,16 @@ std::set<std::int64_t> installed_nexus_ids(Context& ctx, const mol::Instance& in
     return ids;
 }
 
+// 只读的搜索/详情：没有实例时一律视为「未安装」。
+std::set<std::int64_t> installed_nexus_ids_if_any(Context& ctx) {
+    try {
+        return installed_nexus_ids(ctx, mol::load_instance(ctx.instance_dir, ctx.profile_override(), ctx.mem));
+    } catch (const mol::Error& e) {
+        if (e.code != "instance_not_found") throw;
+    }
+    return {};
+}
+
 NexusModRow to_row(const mol::NexusModSummary& m, bool installed, mol::mr* mem) {
     return NexusModRow{.mod_id = m.mod_id, .name = std::pmr::string(m.name, mem), .author = std::pmr::string(m.author, mem),
                        .summary = std::pmr::string(m.summary, mem), .version = std::pmr::string(m.version, mem),
@@ -210,13 +220,12 @@ Result run_nexus_search(Context& ctx) {
     if (!ctx.args.ok()) return make_usage_error(ctx.args.error, ctx);
     long long count = 10, offset = 0;
     if (!opt_int(ctx, "--count", 10, count) || !opt_int(ctx, "--offset", 0, offset)) return make_usage_error("nexus search: --count/--offset need non-negative integers", ctx);
-    const auto inst = mol::load_instance(ctx.instance_dir, ctx.profile_override(), ctx.mem);
-    const mol::string domain = mol::nexus_game_domain(inst.cfg.game, ctx.mem);
+    const mol::string domain = search_domain(ctx);
     const mol::string sort = ctx.args.get("--sort", "relevance", ctx.mem);
     const mol::string query = ctx.args.positionals.front();
     std::int64_t total = 0;
     const auto found = make_client().search_mods(domain, query, sort, static_cast<int>(count), static_cast<int>(offset), &total, ctx.mem);
-    const auto have = installed_nexus_ids(ctx, inst);
+    const auto have = installed_nexus_ids_if_any(ctx);
     NexusSearchData d{.game = domain, .query = query, .sort = sort, .total = total, .mods = std::pmr::vector<NexusModRow>(ctx.mem)};
     for (const auto& m : found) d.mods.push_back(to_row(m, have.count(m.mod_id) > 0, ctx.mem));
     Result r = ok_result(ctx);
@@ -228,10 +237,9 @@ Result run_nexus_info(Context& ctx) {
     if (!ctx.args.ok()) return make_usage_error(ctx.args.error, ctx);
     long long mod = 0;
     if (!parse_id(ctx.args.get("--mod", "", ctx.mem), mod)) return make_usage_error("nexus info: --mod needs a numeric mod id", ctx);
-    const auto inst = mol::load_instance(ctx.instance_dir, ctx.profile_override(), ctx.mem);
-    const mol::string domain = mol::nexus_game_domain(inst.cfg.game, ctx.mem);
+    const mol::string domain = search_domain(ctx);
     const auto info = make_client().mod_info(domain, mod, ctx.mem);
-    const auto have = installed_nexus_ids(ctx, inst);
+    const auto have = installed_nexus_ids_if_any(ctx);
     NexusInfoData d{.mod = to_row(info.summary, have.count(mod) > 0, ctx.mem), .category = std::pmr::string(info.category, ctx.mem),
                     .requirements = std::pmr::vector<NexusRequirementRow>(ctx.mem), .dlc_requirements = std::pmr::vector<std::pmr::string>(ctx.mem)};
     for (const auto& r : info.requirements)
@@ -303,13 +311,16 @@ bool install_one(Context& ctx, const mol::Instance& inst, const mol::NexusClient
             row.status = "pending";
             row.note = "FOMOD needs choices";
             out.pending.push_back(CollectionPendingRow{std::pmr::string(std::to_string(mod_id), ctx.mem), std::pmr::string(ctx.mem), std::pmr::string("fomod_choices", ctx.mem),
-                                                       std::pmr::string("run `fomod inspect <archive>` then re-run with --fomod FILE (or --fomod-defaults)", ctx.mem), std::pmr::string(e.path, ctx.mem)});
+                                                       std::pmr::string("run `fomod inspect <archive>` then re-run with --fomod FILE (or --fomod-defaults)", ctx.mem),
+                                                       std::pmr::string("https://www.nexusmods.com/" + std::string(domain) + "/mods/" + std::to_string(mod_id), ctx.mem),
+                                                       std::pmr::string(e.path, ctx.mem)});
         } else if (e.code == "nexus_premium") {
             row.status = "pending";
             row.note = "needs a Premium account or an nxm:// link";
             out.pending.push_back(CollectionPendingRow{std::pmr::string(std::to_string(mod_id), ctx.mem), std::pmr::string(ctx.mem), std::pmr::string("manual_download", ctx.mem),
                                                        std::pmr::string("a free Nexus account cannot download this directly; use `nexus download --nxm LINK` then `mods install`", ctx.mem),
-                                                       std::pmr::string("https://www.nexusmods.com/" + std::string(domain) + "/mods/" + std::to_string(mod_id) + "?tab=files", ctx.mem)});
+                                                       std::pmr::string("https://www.nexusmods.com/" + std::string(domain) + "/mods/" + std::to_string(mod_id) + "?tab=files", ctx.mem),
+                                                       std::pmr::string(ctx.mem)});
         } else {
             row.status = "failed";
             row.note = std::pmr::string(std::string(e.code) + ": " + e.what(), ctx.mem);

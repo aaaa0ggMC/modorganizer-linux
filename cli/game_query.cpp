@@ -2,6 +2,7 @@
 // 混用约束：所有 #include 在 import 之前（详见 cli/cmd_common.hpp 文件头）。
 #include "mol/game_host.hpp"
 #include "mol/instance.hpp"
+#include "mol/nexus.hpp"
 
 #include "cmd_common.hpp"
 
@@ -73,6 +74,16 @@ std::vector<std::string> game_info_list(Context& ctx, const mol::Instance& inst,
     for (const auto& v : it.second().array())
         if (auto s = v.try_to<std::string_view>()) out.emplace_back(*s);
     return out;
+}
+
+mol::string search_domain(Context& ctx) {
+    try {
+        const auto inst = mol::load_instance(ctx.instance_dir, ctx.profile_override(), ctx.mem);
+        return mol::nexus_game_domain(inst.cfg.game, ctx.mem);
+    } catch (const mol::Error& e) {
+        if (e.code != "instance_not_found") throw;
+    }
+    return mol::nexus_game_domain("skyrimse", ctx.mem);
 }
 
 std::vector<std::string> forced_plugin_names(Context& ctx, const mol::Instance& inst) {

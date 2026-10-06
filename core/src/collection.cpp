@@ -1,14 +1,19 @@
 #include "mol/collection.hpp"
 
+#include "mol/doctor.hpp"
+
 #include <algorithm>
 #include <filesystem>
 #include <fstream>
+#include <map>
 #include <mutex>
+#include <optional>
 #include <set>
 
 #include "mol/casefold.hpp"
 #include "mol/http.hpp"
 #include "mol/md5.hpp"
+#include "mol/mo2fmt.hpp"
 #include "mol/mod_install.hpp"
 #include "mol/parallel.hpp"
 #include "mol/plugins.hpp"
@@ -250,6 +255,8 @@ State load_state(const Instance& inst, std::string_view slug) {
             ms.archive = S(v, "archive");
             ms.mod_dir = S(v, "mod_dir");
             ms.note = S(v, "note");
+            ms.kind = S(v, "kind");
+            ms.url = S(v, "url");
             st.mods[std::string(k)] = std::move(ms);
         }
     if (const auto* ov = sub(doc, "overrides"); ov && ov->is_object())
@@ -282,6 +289,8 @@ void save_state(const Instance& inst, const State& s) {
         e["archive"] = std::string_view(m.archive);
         e["mod_dir"] = std::string_view(m.mod_dir);
         e["note"] = std::string_view(m.note);
+        e["kind"] = std::string_view(m.kind);
+        e["url"] = std::string_view(m.url);
     }
     auto& ov = doc["overrides"];
     ov._set_object();
@@ -308,6 +317,39 @@ std::string find_cached(const fs::path& dl, const Source& s) {
         if (ext == ".meta" || ext == ".part") continue;
         if (static_cast<std::int64_t>(it->file_size(ec)) != s.file_size) continue;
         if (lower(md5_file(it->path().string())) == lower(s.md5)) return it->path().string();
+    }
+    return {};
+}
+
+// modlist 里已有的 Nexus 文件：(modid, fileid) → mod 目录名（来自 meta.ini）。
+std::map<std::pair<std::int64_t, std::int64_t>, std::string> index_nexus_files(const Instance& inst, std::string_view profile) {
+    std::map<std::pair<std::int64_t, std::int64_t>, std::string> out;
+    for (const auto& md : list_mods(inst, profile)) {
+        if (md.separator || !md.exists || md.nexus_id <= 0) continue;
+        const Ini meta = Ini::load(std::string(md.path) + "/meta.ini");
+        const auto fid = meta.get("General", "fileid");
+        std::int64_t f = 0;
+        if (!fid || fid->empty()) continue;
+        for (char ch : *fid) { if (ch < '0' || ch > '9') { f = 0; break; } f = f * 10 + (ch - '0'); }
+        if (f > 0) out.emplace(std::make_pair(md.nexus_id, f), fs::path(std::string(md.path)).filename().string());
+    }
+    return out;
+}
+
+// 清单里的 SKSE64 条目（外部来源）：按链接或名字认。
+bool is_skse_entry(const Mod& m) {
+    const std::string url = lower(m.source.url), name = lower(m.name);
+    return url.find("silverlock.org") != std::string::npos || name.find("script extender") != std::string::npos ||
+           name.starts_with("skse64") || name == "skse";
+}
+
+// 提供 skse64_loader.exe 的根目录型 mod 目录名；由游戏目录本身提供则为空。
+std::string skse_mod_dir(const Instance& inst) {
+    std::error_code ec;
+    for (const auto& md : list_mods(inst)) {
+        if (!md.enabled || !md.exists || !md.root) continue;
+        for (fs::directory_iterator it(fs::path(std::string(md.path)), ec), end; !ec && it != end; it.increment(ec))
+            if (lower(it->path().filename().string()) == "skse64_loader.exe") return fs::path(std::string(md.path)).filename().string();
     }
     return {};
 }
@@ -427,6 +469,7 @@ Report install_collection(const Instance& inst, const NexusClient* client, const
         }
     }
 
+    std::optional<std::map<std::pair<std::int64_t, std::int64_t>, std::string>> nexus_files;  // 首次用到时建
     for (const std::size_t idx : order) {
         const Mod& m = c.mods[idx];
         const std::string key = m.key();
@@ -438,6 +481,8 @@ Report install_collection(const Instance& inst, const NexusClient* client, const
         out.name = m.name;
         ModState& ms = state.mods[key];
         ms.name = m.name;
+        ms.kind.clear();
+        ms.url = page_url(m);
         const Override ov = state.overrides.count(key) ? state.overrides.at(key) : Override{};
         auto pend = [&](const char* kind, const std::string& detail) {
             Pending p;
@@ -445,6 +490,7 @@ Report install_collection(const Instance& inst, const NexusClient* client, const
             rep.pending.push_back(std::move(p));
             ms.status = "pending";
             ms.note = detail;
+            ms.kind = kind;
             out.status = "pending";
             out.note = detail;
         };
@@ -487,6 +533,44 @@ Report install_collection(const Instance& inst, const NexusClient* client, const
         }
         if (m.has_patches && ov.archive.empty()) {
             pend("unsupported", "this mod needs binary patches from the collection, which mo-linux cannot apply; provide an archive with `collection resolve --archive` or skip it");
+            finish();
+            continue;
+        }
+
+        // 同一个 Nexus 文件已经装在实例里（另一个集合、`nexus install` 或 MO2 装的，meta.ini 的 modid/fileid 一致）→ 复用，不再装一份
+        if (ov.archive.empty() && m.source.type == "nexus" && m.source.mod_id > 0 && m.source.file_id > 0) {
+            if (!nexus_files) nexus_files = index_nexus_files(inst, profile);
+            if (auto hit = nexus_files->find({m.source.mod_id, m.source.file_id}); hit != nexus_files->end()) {
+                const std::string dir = hit->second;
+                ms.status = "installed";
+                ms.mod_dir = dir;
+                ms.note = "already installed (same Nexus file)";
+                out.status = "installed";
+                out.mod_dir = dir;
+                out.note = ms.note;
+                ++rep.installed;
+                final_names.emplace_back(dir);
+                finish();
+                continue;
+            }
+        }
+
+        // SKSE64 在清单里通常是外部来源（skse.silverlock.org），不能从 Nexus 自动下载；
+        // mo-linux 有 `skse install`（从 Nexus 的 SKSE 页面挑与游戏版本匹配的构建），已装就算满足。
+        if (ov.archive.empty() && m.source.type != "nexus" && is_skse_entry(m)) {
+            if (root_provides(inst, "skse64_loader.exe")) {
+                ms.status = "installed";
+                ms.mod_dir = skse_mod_dir(inst);
+                ms.note = "provided by the installed SKSE64";
+                out.status = "installed";
+                out.mod_dir = ms.mod_dir;
+                out.note = ms.note;
+                ++rep.installed;
+                if (!ms.mod_dir.empty()) final_names.emplace_back(ms.mod_dir);
+                finish();
+                continue;
+            }
+            pend("skse", "SKSE64 is distributed outside Nexus: run `mo-linux skse install` (it picks the build that matches your game), then run `collection install` again");
             finish();
             continue;
         }
@@ -545,10 +629,10 @@ Report install_collection(const Instance& inst, const NexusClient* client, const
             else if (m.has_choices) { io.fomod = FomodMode::Choices; io.choices = m.choices; }
             else if (ov.fomod_defaults || opt.fomod_defaults) io.fomod = FomodMode::Defaults;
             else io.fomod = FomodMode::Unset;
-            // 目录名冲突：不是我们装的同名目录 → 加后缀
+            // 目录名冲突（大小写不敏感、按清理后的名字比较）：不是我们装的同名目录 → 加后缀
             std::string dir = m.name;
             if (!ms.mod_dir.empty()) dir = ms.mod_dir;
-            else if (fs::exists(fs::path(std::string(inst.mods_dir)) / dir, ec)) dir += " [" + (m.source.tag.empty() ? std::to_string(idx) : m.source.tag) + "]";
+            else if (mod_name_taken(inst, dir, profile)) dir += " [" + (m.source.tag.empty() ? std::to_string(idx) : m.source.tag) + "]";
             io.name = dir;
             // 之前中断留下的半成品（modlist 里没有但目录存在）：不处理，交给 install_archive 报错，避免误删
             const auto res = mol::install_archive(inst, archive, io);

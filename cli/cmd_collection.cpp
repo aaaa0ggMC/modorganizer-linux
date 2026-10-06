@@ -231,7 +231,7 @@ Result run_collection_install(Context& ctx) {
         for (const auto& m : rep.mods)
             d.mods.push_back(CollectionOutcomeRow{P(m.key, ctx.mem), P(m.name, ctx.mem), P(m.status, ctx.mem), P(m.mod_dir, ctx.mem), P(m.note, ctx.mem)});
         for (const auto& p : rep.pending)
-            d.pending.push_back(CollectionPendingRow{P(p.key, ctx.mem), P(p.name, ctx.mem), P(p.kind, ctx.mem), P(p.detail, ctx.mem), P(p.url, ctx.mem)});
+            d.pending.push_back(CollectionPendingRow{P(p.key, ctx.mem), P(p.name, ctx.mem), P(p.kind, ctx.mem), P(p.detail, ctx.mem), P(p.url, ctx.mem), P("", ctx.mem)});
         for (const auto& n : rep.notes) d.notes.push_back(P(n, ctx.mem));
         Result r = ok(ctx, rep.complete() ? 0 : 4);
         for (const auto& n : rep.notes) r.add_warning("collection_note", n, "");
@@ -258,7 +258,13 @@ Result run_collection_status(Context& ctx) {
         if (m.status == "installed") ++d.installed;
         else if (m.status == "skipped") ++d.skipped;
         else if (m.status == "failed") { ++d.failed; d.status = P("incomplete", ctx.mem); }
-        else { d.status = P("incomplete", ctx.mem); d.pending.push_back(CollectionPendingRow{P(key, ctx.mem), P(m.name, ctx.mem), P("pending", ctx.mem), P(m.note, ctx.mem), P("", ctx.mem)}); }
+        else {
+            d.status = P("incomplete", ctx.mem);
+            std::error_code aec;
+            const bool have_archive = !m.archive.empty() && std::filesystem::is_regular_file(m.archive, aec);
+            d.pending.push_back(CollectionPendingRow{P(key, ctx.mem), P(m.name, ctx.mem), P(m.kind.empty() ? "pending" : m.kind, ctx.mem), P(m.note, ctx.mem),
+                                                     P(m.url, ctx.mem), P(have_archive ? m.archive : std::string(), ctx.mem)});
+        }
     }
     Result r = ok(ctx, d.status == "complete" ? 0 : 4);
     r.set_data(std::move(d));
@@ -325,8 +331,7 @@ Result run_collection_search(Context& ctx) {
     std::int64_t count = 10, offset = 0;
     if (ctx.args.has("--count") && !parse_int(ctx.args.get("--count", "", ctx.mem), count)) return make_usage_error("collection search: --count needs an integer", ctx);
     if (ctx.args.has("--offset") && !parse_int(ctx.args.get("--offset", "", ctx.mem), offset)) return make_usage_error("collection search: --offset needs an integer", ctx);
-    const auto inst = mol::load_instance(ctx.instance_dir, ctx.profile_override(), ctx.mem);
-    const mol::string domain = mol::nexus_game_domain(inst.cfg.game, ctx.mem);
+    const mol::string domain = search_domain(ctx);
     const mol::string sort = ctx.args.get("--sort", "endorsements", ctx.mem);
     const mol::string query = ctx.args.positionals.front();
     std::int64_t total = 0;

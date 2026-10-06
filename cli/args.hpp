@@ -90,6 +90,7 @@ constexpr OptionSpec kOptModsInstall[] = {
 };
 constexpr OptionSpec kOptFomodInspect[] = {
     {"choices", "", "--choices", "Partial/complete choices JSON; unspecified groups use defaults", true},
+    {"images", "", "--images", "Extract the option images into DIR and report their paths (image_path)", true},
 };
 constexpr OptionSpec kOptPluginsMove[] = {
     {"to", "", "--to", "Target load-order position (0 = first)", true},

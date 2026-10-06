@@ -85,6 +85,8 @@ struct ModState {
     std::string archive;  // 实际使用的压缩包路径
     std::string mod_dir;  // mods/ 下的目录名
     std::string note;     // failed 时的原因
+    std::string kind;     // pending 时：manual_download | fomod_choices | unsupported | skse（GUI 据此给出对应操作）
+    std::string url;      // 该 mod 的页面（Nexus 页面或清单给的外部链接）
 };
 struct Override {
     bool skip = false;

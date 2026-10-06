@@ -208,6 +208,7 @@ struct FomodPluginRow {
     std::pmr::string name;
     std::pmr::string description;
     std::pmr::string image;
+    std::pmr::string image_path;  // --images 时：解出的图片绝对路径（解不出为空）
     std::pmr::string type;  // Required|Optional|Recommended|NotUsable|CouldBeUsable（按当前选择求值）
     bool selected = false;
 };
@@ -298,9 +299,10 @@ struct CollectionOutcomeRow {
 struct CollectionPendingRow {
     std::pmr::string key;
     std::pmr::string name;
-    std::pmr::string kind;  // manual_download|fomod_choices|unsupported
+    std::pmr::string kind;  // manual_download|fomod_choices|unsupported|skse（旧状态文件里没有记录时为 pending）
     std::pmr::string detail;
     std::pmr::string url;
+    std::pmr::string archive;  // 已下载的压缩包（fomod_choices 时可直接 `fomod inspect`）；没有为空
 };
 struct CollectionInstallData {
     std::pmr::string name;

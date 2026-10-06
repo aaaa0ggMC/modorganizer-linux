@@ -398,7 +398,9 @@ Resolved resolve(const Config& cfg, const Choices& choices, bool use_defaults, c
                     for (std::size_t i = 0; i < g.plugins.size(); ++i)
                         if (g.plugins[i].name == nm) { idx = i; break; }
                     if (idx == g.plugins.size()) bad("no plugin '" + nm + "' in group '" + g.name + "' of step '" + step.name + "'");
-                    if (!usable(types[idx])) bad("plugin '" + nm + "' is not usable (NotUsable)");
+                    // NotUsable 插件在 MO2 里是灰掉且不勾选的（SelectAll 组也一样）；Vortex 记录的选择里可能带着它
+                    // （例如只有说明文字、没有文件的「介绍」页）。按 MO2 语义忽略它，组的数量约束照常检查。
+                    if (!usable(types[idx])) continue;
                     sel.insert(idx);
                 }
                 for (std::size_t i = 0; i < g.plugins.size(); ++i)

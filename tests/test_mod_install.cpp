@@ -235,3 +235,26 @@ TEST(single_known_data_folder_is_not_stripped_as_a_wrapper) {
     install_archive(inst, (t.dir / "wrapped2.zip").string(), "Wrapped2");
     CHECK(fs::exists(t.dir / "inst/mods/Wrapped2/SKSE/Plugins/y.dll"));
 }
+
+TEST(fomod_images_are_extracted_case_insensitively) {
+    if (!have_zip_tool() || std::system("command -v 7z >/dev/null 2>&1 || command -v 7zz >/dev/null 2>&1") != 0) return;
+    Tmp t;
+    const Instance inst = make(t);
+    // 外面包一层目录；图片的真实大小写与配置里的不同
+    put(t.dir / "f/Wrap/fomod/ModuleConfig.xml", "<config/>");
+    put(t.dir / "f/Wrap/Images/Header.PNG", "png-a");
+    put(t.dir / "f/Wrap/other/sub/Header.png", "png-b");
+    put(t.dir / "f/Wrap/textures/big.dds", "not an image we want");
+    CHECK(zip_dir(t.dir / "f", t.dir / "fomod.zip"));
+    const std::vector<std::string> imgs{"images\\header.png", "other/sub/header.png", "missing.png", "..\\evil.png"};
+    const auto got = extract_fomod_images(inst, (t.dir / "fomod.zip").string(), imgs, (t.dir / "imgs").string());
+    CHECK_EQ(got.size(), std::size_t{2});
+    auto body = [](const std::string& p) { std::ifstream in(p); std::string s; std::getline(in, s); return s; };
+    CHECK(got.count("images\\header.png") && body(got.at("images\\header.png")) == "png-a");
+    CHECK(got.count("other/sub/header.png") && body(got.at("other/sub/header.png")) == "png-b");
+    CHECK(!fs::exists(t.dir / "imgs/big.dds"));
+    // 只解了图片：临时目录已清理
+    std::size_t leftovers = 0;
+    for (const auto& e : fs::directory_iterator(t.dir / "inst/downloads")) leftovers += e.path().filename().string().starts_with(".mol-fomod") ? 1 : 0;
+    CHECK_EQ(leftovers, std::size_t{0});
+}
