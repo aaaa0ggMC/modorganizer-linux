@@ -209,7 +209,7 @@ bool EventSink::should_emit(unsigned long long done, unsigned long long total) {
 }
 
 bool EventSink::emit_line(std::string_view event, std::string_view op, bool has_count,
-                          unsigned long long done, unsigned long long total, bool ok_flag) {
+                          unsigned long long done, unsigned long long total, bool ok_flag, std::string_view item) {
     if (!active_) return false;
     struct Event {
         mol::string event;
@@ -221,6 +221,13 @@ bool EventSink::emit_line(std::string_view event, std::string_view op, bool has_
         unsigned long long done;
         unsigned long long total;
     };
+    struct ProgressItem {
+        mol::string event;
+        mol::string op;
+        unsigned long long done;
+        unsigned long long total;
+        mol::string item;
+    };
     struct Done {
         mol::string event;
         mol::string op;
@@ -228,7 +235,9 @@ bool EventSink::emit_line(std::string_view event, std::string_view op, bool has_
     };
     std::pmr::monotonic_buffer_resource arena;
     alib6::AData data(&arena);
-    if (has_count) {
+    if (has_count && !item.empty()) {
+        data = alib6::to_adata(ProgressItem{mol::string(event, &arena), mol::string(op, &arena), done, total, mol::string(item, &arena)}, &arena);
+    } else if (has_count) {
         data = alib6::to_adata(Progress{mol::string(event, &arena), mol::string(op, &arena),
                                       done, total}, &arena);
     } else if (event == "done") {
@@ -256,12 +265,14 @@ void EventSink::start(std::string_view op) {
     }
 }
 
-void EventSink::progress(std::string_view op, unsigned long long done, unsigned long long total) {
+void EventSink::progress(std::string_view op, unsigned long long done, unsigned long long total, std::string_view item) {
     if (!active_) return;
-    if (!should_emit(done, total)) return;
-    if (emit_line("progress", op, true, done, total, true)) {
+    const bool new_item = !item.empty() && item != last_item_;
+    if (!new_item && !should_emit(done, total)) return;
+    if (emit_line("progress", op, true, done, total, true, item)) {
         last_done_ = done;
         last_ms_ = clock_();
+        if (!item.empty()) last_item_.assign(item);
     }
 }
 

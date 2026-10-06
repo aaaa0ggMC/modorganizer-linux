@@ -111,6 +111,23 @@ TEST(throttle_suppresses_small_steps_and_keeps_start_done) {
     ::close(fds[0]);
 }
 
+TEST(item_changes_bypass_the_throttle_and_are_serialized) {
+    int fds[2];
+    CHECK(::pipe(fds) == 0);
+    cli::EventSink sink;
+    CHECK(sink.open("fd:" + std::to_string(fds[1]), std::pmr::get_default_resource()).empty());
+    sink.set_clock(&frozen_clock);
+    sink.progress("install", 1, 1000, "Mod A");  // 新条目 → 发（虽然 1 < 10）
+    sink.progress("install", 2, 1000, "Mod A");  // 同一条目、未到阈值 → 抑制
+    sink.progress("install", 3, 1000, "Mod B");  // 换条目 → 发
+    CHECK_EQ(sink.emitted(), std::size_t{2});
+    ::close(fds[1]);
+    const std::string out = drain(fds[0]);
+    ::close(fds[0]);
+    CHECK(out.find("\"item\":\"Mod A\"") != std::string::npos);
+    CHECK(out.find("\"item\":\"Mod B\"") != std::string::npos);
+}
+
 TEST(time_based_throttle_emits_even_when_done_barley_moves) {
     int fds[2];
     CHECK(::pipe(fds) == 0);

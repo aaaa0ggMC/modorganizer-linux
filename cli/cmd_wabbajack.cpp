@@ -187,7 +187,7 @@ Result run_wabbajack_install(Context& ctx) {
             opt.jobs = static_cast<unsigned>(j);
         }
         opt.client = client ? &*client : nullptr;
-        opt.progress = [&](std::string_view stage, std::string_view, std::uint64_t d, std::uint64_t t) { if (sink != nullptr && t > 0) sink->progress(std::string(stage), d, t); };
+        opt.progress = [&](std::string_view stage, std::string_view item, std::uint64_t d, std::uint64_t t) { if (sink != nullptr && t > 0) sink->progress(std::string(stage), d, t, item); };
         const wj::Report rep = wj::install_modlist(m, file, opt);
 
         // 让它成为 mo-linux 能直接用的实例（只在没有 mo-linux.json 时写；已有的配置不动）

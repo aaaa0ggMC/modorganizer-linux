@@ -42,7 +42,9 @@ public:
 
     // ---- 事件 -------------------------------------------------------------
     void start(std::string_view op);
-    void progress(std::string_view op, unsigned long long done, unsigned long long total);
+    // item（可空）：当前处理的条目名（如集合里正在安装的 mod），非空时事件多一个 "item" 字段；
+    // item 变化的那一次不受节流限制，保证 GUI 能看到每个条目。
+    void progress(std::string_view op, unsigned long long done, unsigned long long total, std::string_view item = {});
     void done(std::string_view op, bool ok);
 
     // ---- 观测 -------------------------------------------------------------
@@ -52,7 +54,7 @@ public:
 
 private:
     bool emit_line(std::string_view event, std::string_view op, bool has_count,
-                   unsigned long long done, unsigned long long total, bool ok_flag);
+                   unsigned long long done, unsigned long long total, bool ok_flag, std::string_view item = {});
     bool should_emit(unsigned long long done, unsigned long long total);
     bool write_bytes(const char* data, std::size_t n);
 
@@ -68,6 +70,7 @@ private:
     long long percent_ = 1;
     unsigned long long last_ms_ = 0;
     unsigned long long last_done_ = 0;
+    std::string last_item_;
 };
 
 }  // namespace cli

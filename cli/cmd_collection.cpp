@@ -216,8 +216,8 @@ Result run_collection_install(Context& ctx) {
             if (!parse_int(ctx.args.get("--jobs", "", ctx.mem), j) || j < 1) return make_usage_error("collection install: --jobs needs an integer >= 1", ctx);
             opt.jobs = static_cast<unsigned>(j);
         }
-        opt.progress = [&](std::string_view stage, std::string_view, std::uint64_t done, std::uint64_t total) {
-            if (sink != nullptr && total > 0) sink->progress(std::string(stage), done, total);
+        opt.progress = [&](std::string_view stage, std::string_view item, std::uint64_t done, std::uint64_t total) {
+            if (sink != nullptr && total > 0) sink->progress(std::string(stage), done, total, item);
         };
         const std::string gv = game_info_string(ctx, inst, "version");
         const auto rep = col::install_collection(inst, client ? &*client : nullptr, l.coll, st, opt, gv);

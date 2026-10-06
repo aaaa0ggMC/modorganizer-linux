@@ -128,7 +128,7 @@ Collection parse_collection(std::string_view json) {
     if (!doc.load_from_memory(json) || !doc.is_object()) bad("collection.json is not a JSON object");
     Collection c;
     if (const auto* info = sub(doc, "info")) {
-        c.info.name = S(*info, "name");
+        c.info.name = std::string(html_unescape(S(*info, "name")));
         c.info.author = S(*info, "author");
         c.info.domain = S(*info, "domainName");
         c.info.install_instructions = S(*info, "installInstructions");
@@ -140,7 +140,7 @@ Collection parse_collection(std::string_view json) {
     for (const auto& m : mods->array()) {
         if (!m.is_object()) continue;
         Mod mod;
-        mod.name = S(m, "name");
+        mod.name = std::string(html_unescape(S(m, "name")));  // 清单里的名字是 HTML 转义过的
         mod.version = S(m, "version");
         mod.domain = S(m, "domainName");
         mod.optional = B(m, "optional");

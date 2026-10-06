@@ -1,5 +1,7 @@
 #include "mol/nexus.hpp"
 
+#include "mol/casefold.hpp"
+
 #include <fcntl.h>
 #include <sys/stat.h>
 #include <unistd.h>
@@ -350,7 +352,7 @@ const alib6::AData* get_sub(const alib6::AData& o, const char* k) {
 NexusModSummary parse_mod_summary(const alib6::AData& n, mr* mem) {
     NexusModSummary m(mem);
     m.mod_id = num_of(n, "modId");
-    m.name = string(str_of(n, "name"), mem);
+    m.name = html_unescape(str_of(n, "name"), mem);  // Nexus 返回的名字是 HTML 转义过的
     m.author = string(str_of(n, "author"), mem);
     m.summary = string(str_of(n, "summary"), mem);
     m.version = string(str_of(n, "version"), mem);
@@ -478,7 +480,7 @@ vector<NexusCollectionSummary> NexusClient::search_collections(std::string_view 
         for (const auto& n : nodes->array()) {
             NexusCollectionSummary c(mem);
             c.slug = string(str_of(n, "slug"), mem);
-            c.name = string(str_of(n, "name"), mem);
+            c.name = html_unescape(str_of(n, "name"), mem);
             c.summary = string(str_of(n, "summary"), mem);
             c.endorsements = num_of(n, "endorsements");
             c.downloads = num_of(n, "totalDownloads");
@@ -516,7 +518,7 @@ vector<NexusFile> NexusClient::mod_files(std::string_view game, std::int64_t mod
         if (!f.is_object()) continue;
         NexusFile nf(mem);
         nf.file_id = int_of(f, "file_id");
-        nf.name = string(str_of(f, "name"), mem);
+        nf.name = html_unescape(str_of(f, "name"), mem);
         nf.file_name = string(str_of(f, "file_name"), mem);
         nf.version = string(str_of(f, "version"), mem);
         nf.category = string(str_of(f, "category_name"), mem);

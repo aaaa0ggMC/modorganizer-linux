@@ -183,6 +183,14 @@ TEST(casefold_ascii_only) {
     CHECK(mol::casefold(raw) == "data/\xc3\x9cml\xc3\xa4ut.dds");
 }
 
+TEST(html_unescape_names) {
+    CHECK_EQ(std::string(mol::html_unescape("JK&#39;s Skyhaven forge V1")), std::string("JK's Skyhaven forge V1"));
+    CHECK_EQ(std::string(mol::html_unescape("A &amp; B &lt;x&gt; &quot;q&quot; &apos;")), std::string("A & B <x> \"q\" '"));
+    CHECK_EQ(std::string(mol::html_unescape("&#x4E2D;&#25991;")), std::string("\u4E2D\u6587"));
+    // 不认识的、不完整的、越界的保持原样
+    CHECK_EQ(std::string(mol::html_unescape("R&D &bogus; &#; &#xZZ; & tail &#1114112;")), std::string("R&D &bogus; &#; &#xZZ; & tail &#1114112;"));
+}
+
 TEST(casefold_uses_supplied_resource) {
     RecordingMr rec;
     mol::string s = mol::casefold("a long enough path to defeat short string optimization", &rec);

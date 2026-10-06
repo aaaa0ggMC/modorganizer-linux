@@ -21,7 +21,7 @@
 
 ## 进度事件（`--events`）
 每行一个 JSON：`{"event":"progress","op":"apply","done":120,"total":5000}`；开始 `{"event":"start","op":"apply"}`；结束 `{"event":"done","op":"apply","ok":true}`（运行失败时为 `ok:false`）。
-`progress` 至多每 50ms 或每 1% 发一次；对端关闭管道（EPIPE）时静默停止发送，命令照常完成。`fifo:`：不存在则 mkfifo，以非阻塞写打开，无读端则放弃（不阻塞命令）。`unix:`：connect 失败则放弃。`fd:`：直接 write。
+`progress` 可带 `item`（当前处理的条目，如集合里正在下载/安装的 mod 名：`{"event":"progress","op":"install","done":3,"total":68,"item":"SkyUI"}`），item 变化的那一次不节流；`progress` 至多每 50ms 或每 1% 发一次；对端关闭管道（EPIPE）时静默停止发送，命令照常完成。`fifo:`：不存在则 mkfifo，以非阻塞写打开，无读端则放弃（不阻塞命令）。`unix:`：connect 失败则放弃。`fd:`：直接 write。
 
 ## 命令
 - `instance init [--game-dir G] [--prefix P] [--prefix-user U] [--runner proton|wine] [--proton-path X] [--steam-root S] [--profile N]`
