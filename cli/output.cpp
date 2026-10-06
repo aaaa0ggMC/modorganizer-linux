@@ -23,7 +23,7 @@ void add(std::pmr::vector<std::pmr::string>& lines, const std::string& text, mol
 
 std::string human(long long n) {
     if (n < 0) return "?";
-    const char* u[] = {"B", "KB", "MB", "GB", "TB"};
+    const char* u[] = {"B", "KiB", "MiB", "GiB", "TiB"};
     double v = static_cast<double>(n);
     int i = 0;
     while (v >= 1024 && i < 4) { v /= 1024; ++i; }
@@ -190,6 +190,9 @@ std::pmr::vector<std::pmr::string> render_text(const Result& r, mol::mr* mem) {
         if (const auto* g = arr(r.data, "game_versions"))
             for (const auto& v : g->array()) gvs += (gvs.empty() ? "" : ", ") + std::string(v.try_to<std::string_view>().value_or(""));
         if (!gvs.empty()) add(lines, "game version: " + gvs + (S(r.data, "game_version").empty() ? "" : " (this game: " + S(r.data, "game_version") + ")"), mem);
+        if (adata::integer(r.data, "fomod_choices") > 0)
+            add(lines, std::to_string(adata::integer(r.data, "fomod_choices")) + " mods carry the curator's FOMOD choices (applied leniently: where the archive no longer matches, "
+                       "the installer default is used and noted); FOMODs without recorded choices become pending (or use --fomod-defaults)", mem);
         if (!adata::boolean(r.data, "has_instance")) add(lines, "(no instance: install status not shown)", mem);
         if (!S(r.data, "description").empty()) add(lines, "read the author's notes first: mo-linux collection readme " + S(r.data, "slug"), mem);
     } else if (cmd == "collection search") {

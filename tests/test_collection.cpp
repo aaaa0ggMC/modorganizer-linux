@@ -338,6 +338,69 @@ TEST(same_nexus_file_with_different_fomod_choices_is_not_reused) {
     CHECK_EQ(c.mods["fx"].mod_dir, a.mods["fx"].mod_dir);  // 选择相同：复用
 }
 
+TEST(manifest_fomod_choices_survive_repeated_names_and_stale_options) {
+    if (!have_zip()) return;
+    Tmp t;
+    // 每一步都叫 "Installation"、组名 " "；第二步只有一个 Required 的 "Finish Installation"（真实集合里的写法）
+    fs::create_directories(t.dir / "src/fx/fomod");
+    std::ofstream(t.dir / "src/fx/fomod/ModuleConfig.xml") << R"(<?xml version="1.0" encoding="UTF-16"?><config><installSteps order="Explicit">
+<installStep name="Installation"><optionalFileGroups><group name=" " type="SelectExactlyOne"><plugins order="Explicit">
+<plugin name="High Poly"><files><file source="hp.txt" destination="poly.txt"/></files><typeDescriptor><type name="Optional"/></typeDescriptor></plugin>
+<plugin name="Low Poly"><files><file source="lp.txt" destination="poly.txt"/></files><typeDescriptor><type name="Optional"/></typeDescriptor></plugin>
+</plugins></group></optionalFileGroups></installStep>
+<installStep name="Installation"><optionalFileGroups><group name=" " type="SelectExactlyOne"><plugins order="Explicit">
+<plugin name="Finish Installation"><typeDescriptor><type name="Required"/></typeDescriptor></plugin>
+</plugins></group></optionalFileGroups></installStep>
+<installStep name="Timing"><optionalFileGroups><group name="Timing is Everything" type="SelectExactlyOne"><plugins order="Explicit">
+<plugin name="Default Timing"><files><file source="d.txt" destination="timing.txt"/></files><typeDescriptor><type name="Recommended"/></typeDescriptor></plugin>
+<plugin name="Fast"><files><file source="f.txt" destination="timing.txt"/></files><typeDescriptor><type name="Optional"/></typeDescriptor></plugin>
+</plugins></group></optionalFileGroups></installStep>
+</installSteps></config>)";  // 声明 UTF-16，内容是 UTF-8（A13）
+    put(t.dir / "src/fx/hp.txt", "HP");
+    put(t.dir / "src/fx/lp.txt", "LP");
+    put(t.dir / "src/fx/d.txt", "D");
+    put(t.dir / "src/fx/f.txt", "F");
+    fs::create_directories(t.dir / "inst/downloads");
+    zip_dir(t.dir / "src/fx", t.dir / "inst/downloads/fx.zip");
+    const std::string md5 = md5_file((t.dir / "inst/downloads/fx.zip").string());
+    const auto sz = fs::file_size(t.dir / "inst/downloads/fx.zip");
+    std::string longname = "Draugrs - My patches - SE by Xtudo - Diverse Dragon Priests";
+    while (longname.size() < 250) longname += " — Xavbio";
+    // 清单记录：两个同名步骤各自的选择 + 一个新版压缩包里已经没有的选项 "Old Timing"
+    const Collection coll = parse_collection(R"({"info":{"name":"C","domainName":"skyrimspecialedition"},"mods":[{"name":")" + longname +
+        R"(","version":"1","optional":false,"source":{"type":"nexus","modId":7,"fileId":8,"fileSize":)" + std::to_string(sz) + R"(,"md5":")" + md5 +
+        R"(","tag":"fx"},"choices":{"type":"fomod","options":[
+          {"name":"Installation","groups":[{"name":" ","choices":[{"name":"Low Poly","idx":1}]}]},
+          {"name":"Installation","groups":[{"name":" ","choices":[{"name":"Finish Installation","idx":0}]}]},
+          {"name":"Timing","groups":[{"name":"Timing is Everything","choices":[{"name":"Old Timing","idx":2}]}]}]}}],"modRules":[]})");
+    Instance inst;
+    inst.root.assign((t.dir / "inst").string());
+    inst.mods_dir.assign((t.dir / "inst/mods").string());
+    inst.profiles_dir.assign((t.dir / "inst/profiles").string());
+    inst.downloads_dir.assign((t.dir / "inst/downloads").string());
+    inst.overwrite_dir.assign((t.dir / "inst/overwrite").string());
+    inst.cfg.game.assign("skyrimse");
+    inst.cfg.profile.assign("Default");
+    fs::create_directories(t.dir / "inst/profiles/Default");
+    put(t.dir / "game/Data/Skyrim.esm");
+    inst.cfg.game_dir.assign((t.dir / "game").string());
+    State st;
+    st.slug = "c";
+    const Report r = install_collection(inst, nullptr, coll, st, {}, {});
+    CHECK(r.complete());
+    CHECK_EQ(r.installed, std::size_t{1});
+    const std::string dir = st.mods["fx"].mod_dir;
+    CHECK(dir.size() <= 100);                                                 // A12：长名截短 + 哈希
+    CHECK_EQ(slurp(t.dir / "inst/mods" / dir / "poly.txt"), std::string("LP"));   // A14：同名步骤各用各的选择
+    CHECK_EQ(slurp(t.dir / "inst/mods" / dir / "timing.txt"), std::string("D"));   // 对不上的组 → 安装器默认
+    CHECK(st.mods["fx"].note.find("Old Timing") != std::string::npos);        // 并且记下来了
+    CHECK(!r.notes.empty());
+    // 重跑：同一个目录名，什么都不重做
+    const Report r2 = install_collection(inst, nullptr, coll, st, {}, {});
+    CHECK(r2.complete());
+    CHECK_EQ(st.mods["fx"].mod_dir, dir);
+}
+
 TEST(downloads_run_in_parallel_and_installs_stay_ordered) {
     if (!have_zip()) return;
     Tmp t;

@@ -51,6 +51,10 @@ set_target_properties(mol-cow PROPERTIES C_STANDARD 11 C_VISIBILITY_PRESET hidde
 target_compile_options(mol-cow PRIVATE -Wall -Wextra -O2 -fno-strict-aliasing -U_FORTIFY_SOURCE)
 target_link_libraries(mol-cow PRIVATE ${CMAKE_DL_LIBS})
 
+# 测试用的假游戏层（tests/check_cli.py 用 MOL_GAME_LIB 指向它，测依赖游戏版本的逻辑）
+add_library(fake-mo-game SHARED tests/fake_game_host.c)
+set_target_properties(fake-mo-game PROPERTIES C_STANDARD 11 C_VISIBILITY_PRESET hidden)
+
 # ---- tests: tests/test_*.cpp 每个文件一个可执行文件 ----------------------------
 enable_testing()
 file(GLOB TEST_SRC CONFIGURE_DEPENDS tests/test_*.cpp)

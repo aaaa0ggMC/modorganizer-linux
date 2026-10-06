@@ -215,6 +215,40 @@ with tempfile.TemporaryDirectory(prefix='mol-cli-col-', dir='/tmp') as tmp_c:
     data, _ = call('-j', '-q', '-i', str(ci), 'collection', 'install', str(man), '--downloads', str(shared), code=4, env=env_c)
     assert shared.is_dir() and data['data']['preflight']['download_size'] == 1500
     checks += 1
+# 依赖游戏版本的逻辑：用构建目录里的假游戏层（libfake-mo-game.so，版本 FAKE_GAME_VERSION）
+fake_host = Path(exe).resolve().parent / 'libfake-mo-game.so'
+if fake_host.is_file():
+    with tempfile.TemporaryDirectory(prefix='mol-cli-ver-', dir='/tmp') as tmp_v:
+        tv = Path(tmp_v)
+        (tv / 'game/Data').mkdir(parents=True)
+        (tv / 'game/SkyrimSE.exe').write_bytes(b'MZ')
+        (tv / 'game/Data/Skyrim.esm').write_bytes(b'TES4')
+        env_v = dict(os.environ, HOME=str(tv / 'home'), XDG_CONFIG_HOME=str(tv / 'cfg'), NEXUS_API_KEY='', MOL_GAME_LIB=str(fake_host), FAKE_GAME_VERSION='1.7.104.0')
+        env_v.pop('MOL_INSTANCE', None)
+        vi = tv / 'inst'
+        call('-j', '-i', str(vi), 'instance', 'init', '--game-dir', str(tv / 'game'), '--prefix', str(tv / 'pfx'), env=env_v)
+        man = tv / 'c.json'
+        man.write_text(json.dumps({'info': {'name': 'Old', 'domainName': 'skyrimspecialedition', 'gameVersions': ['1.6.1170.0']},
+            'mods': [{'name': 'A', 'version': '1', 'optional': False, 'source': {'type': 'nexus', 'modId': 1, 'fileId': 2, 'fileSize': 7, 'tag': 'a'}},
+                     {'name': 'B', 'version': '1', 'optional': False, 'source': {'type': 'nexus', 'modId': 3, 'fileId': 4, 'fileSize': 9, 'tag': 'b'}}], 'modRules': []}))
+        (vi / 'downloads').mkdir(exist_ok=True)
+        (vi / 'downloads' / 'whatever.7z').write_bytes(b'1234567')  # 与 A 同大小：预检算作已在手
+        r = subprocess.run([exe, '-j', '-i', str(vi), 'collection', 'install', str(man)], text=True, capture_output=True, env=env_v)
+        assert r.returncode == 4, (r.returncode, r.stderr)
+        out = json.loads(r.stdout)
+        pf = out['data']['preflight']
+        assert (pf['download_size'], pf['remaining_size']) == (16, 9), pf
+        assert 'game_version' in r.stderr and 'already here' in r.stderr and 'KiB' not in r.stderr, r.stderr
+        assert any('1.6.1170.0' in w['message'] for w in out['warnings']), out['warnings']
+        # next：先降级（需要人），不再让你装当前版本的 SKSE
+        nx, _ = call('-j', '-i', str(vi), 'next', env=env_v)
+        ids = [s['id'] for s in nx['data']['steps']]
+        assert ids[0] == 'game.downgrade' and nx['data']['steps'][0]['needs_human'] and not any(i.startswith('skse') for i in ids), ids
+        # 版本对上以后：降级这一步消失，SKSE 步骤回来
+        nx, _ = call('-j', '-i', str(vi), 'next', env=dict(env_v, FAKE_GAME_VERSION='1.6.1170.0'))
+        ids = [s['id'] for s in nx['data']['steps']]
+        assert 'game.downgrade' not in ids and any(i.startswith('skse') for i in ids), ids
+        checks += 1
 # overview：一次取齐；与单独的 next/doctor 一致（上面的 with 块结束时临时目录已删除，这里自建实例）
 with tempfile.TemporaryDirectory(prefix='mol-cli-ov-', dir='/tmp') as tmp_ov:
     ovr = Path(tmp_ov)

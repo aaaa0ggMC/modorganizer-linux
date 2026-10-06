@@ -227,12 +227,14 @@ struct FomodPluginRow {
 };
 struct FomodGroupRow {
     std::pmr::string name;
+    std::pmr::string key;  // choices 文件里用的组键（同一步里同名的第 k 个组是 "名字 [#k]"）
     std::pmr::string type;  // SelectExactlyOne 等
     bool explicit_choice = false;
     std::pmr::vector<FomodPluginRow> plugins;
 };
 struct FomodStepRow {
     std::pmr::string name;
+    std::pmr::string key;  // choices 文件里用的步骤键（可见的同名步骤的第 k 个是 "名字 [#k]"）
     bool visible = true;
     std::pmr::vector<FomodGroupRow> groups;
 };
@@ -307,6 +309,7 @@ struct CollectionInspectData {
     std::int64_t declared_total_size = 0;  // Nexus 页面声明的大小（常常偏低，仅供参考）
     std::pmr::vector<CollectionSourceRow> sources;  // 按来源类型统计
     bool has_instance = false;             // false：没有实例，mods[].status 一律 "new"、game_version 为空
+    std::int64_t fomod_choices = 0;        // 清单里记录了 FOMOD 选择的 mod 数（安装时宽松套用：对不上的组用安装器默认并记 note）
     std::int64_t plugin_count = 0;
     std::int64_t rule_count = 0;
     std::pmr::string install_instructions;

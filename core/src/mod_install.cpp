@@ -6,6 +6,8 @@
 #include <unistd.h>
 
 #include <algorithm>
+#include <cstdio>
+#include <cstring>
 #include <filesystem>
 #include <map>
 #include <string>
@@ -14,6 +16,7 @@
 
 #include "mol/casefold.hpp"
 #include "mol/mo2fmt.hpp"
+#include "mol/xxh64.hpp"
 
 extern char** environ;
 
@@ -127,11 +130,25 @@ bool looks_like_data_root(const fs::path& d) {
     return false;
 }
 
+// 目录名最长字节数。单个路径段的上限是 255 字节（ext4/btrfs），Nexus 上有 150–250 字符的 mod 名，
+// 带多字节字符或集合追加的 " [tag]" 就会 ENAMETOOLONG；再留余量给 mod 里自己的长路径。
+constexpr std::size_t kMaxModName = 100;
+
 std::string sanitize(std::string s) {
     for (char& c : s)
         if (c == '/' || c == '\\' || c == ':' || c == '*' || c == '?' || c == '"' || c == '<' || c == '>' || c == '|' || c == '\0') c = '_';
     while (!s.empty() && (s.front() == '.' || s.front() == ' ')) s.erase(s.begin());
     while (!s.empty() && (s.back() == '.' || s.back() == ' ')) s.pop_back();
+    if (s.size() > kMaxModName) {
+        // 截断（按 UTF-8 字符边界）+ 全名的稳定短哈希：同一个名字每次得到同一个目录名（重跑幂等），不同长名不撞
+        char tag[16];
+        std::snprintf(tag, sizeof tag, " ~%08llx", static_cast<unsigned long long>(xxh64(s) & 0xffffffffULL));
+        std::size_t cut = kMaxModName - std::strlen(tag);
+        while (cut > 0 && (static_cast<unsigned char>(s[cut]) & 0xC0) == 0x80) --cut;
+        s.resize(cut);
+        while (!s.empty() && (s.back() == '.' || s.back() == ' ')) s.pop_back();
+        s += tag;
+    }
     return s;
 }
 
@@ -268,7 +285,8 @@ InstallResult install_archive(const Instance& inst, std::string_view archive_s, 
             fomod::Env env = opt.fomod_env;
             if (!env.file_state) env.file_state = make_file_state(inst, profile, mem);
             const fomod::Resolved r = fomod::resolve(cfg, opt.fomod == FomodMode::Choices ? opt.choices : fomod::Choices{},
-                                                     opt.fomod == FomodMode::Defaults || opt.use_defaults_for_missing, env);
+                                                     opt.fomod == FomodMode::Defaults || opt.use_defaults_for_missing, env,
+                                                     opt.fomod == FomodMode::Choices && opt.fomod_lenient ? &res.fomod_notes : nullptr);
             const fs::path stage = mods / (".mol-stage-" + std::to_string(::getpid()));
             fs::remove_all(stage, ec);
             fs::create_directories(stage, ec);

@@ -135,13 +135,46 @@ NextData next_data(Context& ctx, const mol::Instance* inst, const mol::vector<mo
         return finish();
     }
 
+    const std::string game_version = game_info_string(ctx, *inst, "version");
     mol::vector<mol::Check> own(ctx.mem);
     if (!checks) {
-        own = mol::run_doctor(*inst, game_info_string(ctx, *inst, "version"), ctx.mem);
+        own = mol::run_doctor(*inst, game_version, ctx.mem);
         checks = &own;
     }
+
+    // 实例里的集合要求的游戏版本（清单 info.gameVersions）与本机不符 → 先降级。
+    // 这时 doctor 按「当前版本」给的 `skse install` 会装错 SKSE，压下去，等降级后再由 doctor 给出。
+    std::string downgrade_to;
+    {
+        std::error_code ec;
+        const fs::path cdir = fs::path(std::string(inst->root)) / "collections";
+        for (fs::directory_iterator it(cdir, ec), end; !game_version.empty() && downgrade_to.empty() && !ec && it != end; it.increment(ec)) {
+            if (!it->is_directory(ec)) continue;
+            const std::string slug = it->path().filename().string();
+            mol::collection::State st;
+            try { st = mol::collection::load_state(*inst, slug); } catch (const mol::Error&) { continue; }
+            if (st.mods.empty()) continue;
+            fs::path j = it->path() / ("archive-" + std::to_string(st.revision)) / "collection.json";
+            if (!fs::exists(j, ec)) j = it->path() / "archive-local" / "collection.json";
+            std::ifstream in(j, std::ios::binary);
+            if (!in) continue;
+            const std::string text((std::istreambuf_iterator<char>(in)), std::istreambuf_iterator<char>());
+            std::vector<std::string> want;
+            try { want = mol::collection::parse_collection(text).info.game_versions; } catch (const mol::Error&) { continue; }
+            if (want.empty() || std::find(want.begin(), want.end(), game_version) != want.end()) continue;
+            downgrade_to = want.front();
+            add("game.downgrade",
+                "collection '" + slug + "' targets game version " + want.front() + " but this game is " + game_version +
+                    ": change the game version first (read `collection readme " + slug + "`; a downgrade patcher installed as a mod can be run with "
+                    "`run --exe <patcher>.exe`, which is copy-on-write and leaves the Steam files untouched). SKSE must match the new version: "
+                    "run `skse install` after the downgrade",
+                {"collection", "readme", slug}, "read", true, true, false);
+        }
+    }
+
     for (const auto& c : *checks) {
         if (c.level == "ok") continue;
+        if (!downgrade_to.empty() && std::string_view(c.id).starts_with("skse")) continue;  // 见上：降级后再装 SKSE
         const bool blocking = c.level == "error" || c.id == "farm.busy";  // 游戏还在跑时不能 apply/run
         if (!c.fix.empty()) {
             NextStep s{.id = std::pmr::string(c.id, ctx.mem), .why = std::pmr::string(c.message, ctx.mem), .command = std::pmr::vector<std::pmr::string>(ctx.mem),
@@ -189,7 +222,9 @@ NextData next_data(Context& ctx, const mol::Instance* inst, const mol::vector<mo
                    .command = std::pmr::vector<std::pmr::string>(ctx.mem), .effects = std::pmr::string("network", ctx.mem), .blocking = true, .needs_human = true, .confirm = false};
         s.command.push_back(std::pmr::string("nexus", ctx.mem));
         s.command.push_back(std::pmr::string("login", ctx.mem));
-        d.steps.insert(d.steps.begin(), std::move(s));
+        auto at = d.steps.begin();
+        while (at != d.steps.end() && at->id == "game.downgrade") ++at;  // 降级永远是第一步
+        d.steps.insert(at, std::move(s));
     }
 
     if (std::none_of(d.steps.begin(), d.steps.end(), [](const NextStep& s) { return s.blocking; })) {

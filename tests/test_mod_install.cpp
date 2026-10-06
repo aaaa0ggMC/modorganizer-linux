@@ -290,3 +290,28 @@ TEST(fomod_images_are_extracted_case_insensitively) {
     for (const auto& e : fs::directory_iterator(t.dir / "inst/downloads")) leftovers += e.path().filename().string().starts_with(".mol-fomod") ? 1 : 0;
     CHECK_EQ(leftovers, std::size_t{0});
 }
+
+TEST(very_long_mod_names_are_shortened_stably) {
+    // 真实集合里的名字：150–250 字符，常带「…」「–」这类多字节字符，再加集合的 " [tag]" 后缀 → 超过 255 字节
+    std::string longname = "Draugrs - My patches - SE by Xtudo - Diverse Dragon Priests";
+    while (longname.size() < 300) longname += " \xE2\x80\x94 Xavbio Dragon Priests \xE2\x80\xA6";
+    const std::string a = sanitize_mod_name(longname);
+    CHECK(a.size() <= 100);
+    CHECK_EQ(a, sanitize_mod_name(longname));                    // 稳定：重跑得到同一个目录名
+    CHECK(a != sanitize_mod_name(longname + " [tag]"));          // 不同的长名不撞
+    CHECK(a.rfind("Draugrs - My patches", 0) == 0);              // 前缀可读
+    for (std::size_t i = 0; i < a.size(); ++i)                   // 截在 UTF-8 字符边界上：结尾不是半个字符
+        if (static_cast<unsigned char>(a[i]) >= 0xC0) CHECK(i + 1 < a.size());
+    CHECK_EQ(sanitize_mod_name("Short Name"), std::string("Short Name"));
+    if (!have_zip_tool()) return;
+    Tmp t;
+    const Instance inst = make(t);
+    put(t.dir / "src/meshes/a.nif");
+    CHECK(zip_dir(t.dir / "src", t.dir / "m.zip"));
+    InstallOptions opt;
+    opt.name = longname;
+    const auto res = install_archive(inst, (t.dir / "m.zip").string(), opt);  // 以前：rename → ENAMETOOLONG
+    CHECK_EQ(std::string(res.name), a);
+    CHECK(fs::exists(t.dir / "inst/mods" / a / "meshes/a.nif"));
+    CHECK(mod_name_taken(inst, longname, "Default"));
+}

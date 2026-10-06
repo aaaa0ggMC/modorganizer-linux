@@ -4,7 +4,9 @@
 #include <fstream>
 
 #include "minitest.hpp"
+#include "mol/collection.hpp"
 #include "mol/fomod.hpp"
+#include "mol/xml.hpp"
 
 namespace fs = std::filesystem;
 using namespace mol;
@@ -216,4 +218,77 @@ TEST(choices_json_roundtrip) {
     CHECK(parse_choices_json(j) == c);
     CHECK_EQ(code_of([] { parse_choices_json("[]"); }), std::string("invalid_argument"));
     CHECK_EQ(code_of([] { parse_choices_json("{\"steps\":{\"a\":{\"b\":\"x\"}}}"); }), std::string("invalid_argument"));
+}
+
+namespace {
+// 每一步都叫 "Installation"、组名都是 " "（真实集合里的 FOMOD 常这样写）；最后一步只有一个说明性的 "Finish Installation"
+const char* kDupXml = R"(<config><moduleName>Dup</moduleName><installSteps order="Explicit">
+<installStep name="Installation"><optionalFileGroups><group name=" " type="SelectExactlyOne"><plugins order="Explicit">
+  <plugin name="High Poly"><files><file source="hp.esp" destination="x.esp"/></files><typeDescriptor><type name="Optional"/></typeDescriptor></plugin>
+  <plugin name="Low Poly"><files><file source="lp.esp" destination="x.esp"/></files><typeDescriptor><type name="Optional"/></typeDescriptor></plugin>
+</plugins></group></optionalFileGroups></installStep>
+<installStep name="Installation"><optionalFileGroups><group name=" " type="SelectExactlyOne"><plugins order="Explicit">
+  <plugin name="Finish Installation"><typeDescriptor><type name="Required"/></typeDescriptor></plugin>
+</plugins></group></optionalFileGroups></installStep>
+</installSteps></config>)";
+const char* kTimingXml = R"(<config><moduleName>T</moduleName><installSteps order="Explicit">
+<installStep name="Main"><optionalFileGroups><group name="Timing is Everything" type="SelectExactlyOne"><plugins order="Explicit">
+  <plugin name="Default Timing"><files><file source="d.esp" destination="t.esp"/></files><typeDescriptor><type name="Recommended"/></typeDescriptor></plugin>
+  <plugin name="Fast &amp; Loose"><files><file source="f.esp" destination="t.esp"/></files><typeDescriptor><type name="Optional"/></typeDescriptor></plugin>
+</plugins></group></optionalFileGroups></installStep></installSteps></config>)";
+std::string selected(const Resolved& r) {
+    std::string s;
+    for (const auto& st : r.steps)
+        for (const auto& g : st.groups)
+            for (const auto& p : g.plugins)
+                if (p.selected) s += p.name + ";";
+    return s;
+}
+}  // namespace
+
+TEST(repeated_step_and_group_names_keep_their_own_choices) {
+    const Config c = parse_config(parse_xml(kDupXml));
+    // Vortex 清单：两个同名步骤按出现次序记录
+    const Choices ch = mol::collection::choices_from_vortex(R"({"type":"fomod","options":[
+        {"name":"Installation","groups":[{"name":" ","choices":[{"name":"Low Poly","idx":1}]}]},
+        {"name":"Installation","groups":[{"name":" ","choices":[{"name":"Finish Installation","idx":0}]}]}]})");
+    CHECK(ch.count("Installation") == 1 && ch.count(occurrence_key("Installation", 2)) == 1);
+    const Resolved r = resolve(c, ch, false, {});  // 以前：两步的选择被合并 → "no plugin 'Finish Installation' in group ' '"
+    CHECK_EQ(selected(r), std::string("Low Poly;Finish Installation;"));
+}
+
+TEST(names_match_ignoring_case_whitespace_and_html_entities) {
+    const Config c = parse_config(parse_xml(kTimingXml));
+    Choices ch;
+    ch["main"]["timing is everything "] = {"Fast &amp; loose"};
+    CHECK_EQ(selected(resolve(c, ch, false, {})), std::string("Fast & Loose;"));
+}
+
+TEST(lenient_mode_falls_back_to_defaults_with_notes) {
+    const Config c = parse_config(parse_xml(kTimingXml));
+    Choices gone;  // 清单里记录的选项在新版压缩包里没有了 → ExactlyOne 组一个都没选上
+    gone["Main"]["Timing is Everything"] = {"Old Timing"};
+    CHECK_EQ(code_of([&] { resolve(c, gone, false, {}); }), std::string("invalid_argument"));  // 严格模式照旧报错
+    std::vector<std::string> notes;
+    const Resolved r = resolve(c, gone, false, {}, &notes);
+    CHECK_EQ(selected(r), std::string("Default Timing;"));
+    CHECK_EQ(notes.size(), std::size_t{2});  // 忽略了不存在的插件 + 该组退回默认
+    std::vector<std::string> n2;
+    CHECK_EQ(selected(resolve(c, Choices{}, false, {}, &n2)), std::string("Default Timing;"));  // 没有记录的组：默认 + 说明
+    CHECK_EQ(n2.size(), std::size_t{1});
+}
+
+TEST(xml_with_a_wrong_encoding_declaration_still_parses) {
+    // 声明 UTF-16，内容其实是 UTF-8（"encoding specified in XML declaration is incorrect"）
+    const std::string a = "<?xml version=\"1.0\" encoding=\"UTF-16\"?><config><moduleName>Hidden Hideouts</moduleName></config>";
+    CHECK_EQ(std::string(parse_xml(a).child("moduleName")->text), std::string("Hidden Hideouts"));
+    // UTF-16LE + BOM，却声明 UTF-8
+    const std::u16string w = u"<?xml version=\"1.0\" encoding=\"UTF-8\"?><config><moduleName>Ré</moduleName></config>";
+    std::string b = "\xFF\xFE";
+    for (char16_t ch : w) { b.push_back(static_cast<char>(ch & 0xFF)); b.push_back(static_cast<char>(ch >> 8)); }
+    CHECK_EQ(std::string(parse_xml(b).child("moduleName")->text), std::string("R\xC3\xA9"));
+    // 声明 UTF-8，内容是 windows-1252
+    const std::string c = "<?xml version=\"1.0\" encoding=\"UTF-8\"?><config><moduleName>caf\xE9</moduleName></config>";
+    CHECK_EQ(std::string(parse_xml(c).child("moduleName")->text), std::string("caf\xC3\xA9"));
+    CHECK_EQ(code_of([] { parse_xml("<config><a></config>"); }), std::string("invalid_argument"));  // 真坏的 XML 照样报错
 }

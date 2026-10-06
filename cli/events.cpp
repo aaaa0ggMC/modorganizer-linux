@@ -214,7 +214,10 @@ void EventSink::sample(std::string_view op, unsigned long long done) {
     auto it = samples_.find(op);
     if (it == samples_.end()) it = samples_.emplace(std::string(op), std::deque<std::pair<unsigned long long, unsigned long long>>{}).first;
     auto& q = it->second;
-    if (!q.empty() && done < q.back().second) q.clear();         // 新一轮（或换了单位）
+    if (!q.empty() && done < q.back().second) {                   // 新一轮（或换了单位）
+        q.clear();
+        last_rate_.erase(std::string(op));
+    }
     if (!q.empty() && now < q.back().first + 200) {               // 至多每 200ms 记一个点
         q.back().second = done;
         return;
@@ -223,13 +226,18 @@ void EventSink::sample(std::string_view op, unsigned long long done) {
     while (q.size() > 2 && now - q.front().first > 5000) q.pop_front();
 }
 
-double EventSink::rate_of(std::string_view op) const {
+double EventSink::rate_of(std::string_view op) {
+    if (op != "download") return 0;  // 只有字节型的 op 有意义（计数型的「个/秒」截断后是 0，eta 也没法看）
     const auto it = samples_.find(op);
-    if (it == samples_.end() || it->second.size() < 2) return 0;
+    const auto last = last_rate_.find(op);
+    const double prev = last == last_rate_.end() ? 0 : last->second;
+    if (it == samples_.end() || it->second.size() < 2) return prev;
     const auto& a = it->second.front();
     const auto& b = it->second.back();
-    if (b.first < a.first + 1000 || b.second <= a.second) return 0;  // 不足 1 秒或没动：不给速率
-    return static_cast<double>(b.second - a.second) * 1000.0 / static_cast<double>(b.first - a.first);
+    if (b.first < a.first + 1000 || b.second <= a.second) return prev;  // 不足 1 秒或没动：沿用上一次
+    const double r = static_cast<double>(b.second - a.second) * 1000.0 / static_cast<double>(b.first - a.first);
+    last_rate_[std::string(op)] = r;
+    return r;
 }
 
 bool EventSink::emit_line(std::string_view event, std::string_view op, bool has_count,
@@ -271,7 +279,7 @@ bool EventSink::emit_line(std::string_view event, std::string_view op, bool has_
     } else {
         data = alib6::to_adata(Event{mol::string(event, &arena), mol::string(op, &arena)}, &arena);
     }
-    if (has_count && rate > 0) {
+    if (has_count && rate >= 1) {
         data["rate"] = static_cast<std::int64_t>(rate + 0.5);
         if (total > done) data["eta"] = static_cast<std::int64_t>(static_cast<double>(total - done) / rate + 0.5);
     }
