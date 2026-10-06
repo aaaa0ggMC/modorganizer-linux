@@ -313,14 +313,14 @@ bool install_one(Context& ctx, const mol::Instance& inst, const mol::NexusClient
             out.pending.push_back(CollectionPendingRow{std::pmr::string(std::to_string(mod_id), ctx.mem), std::pmr::string(ctx.mem), std::pmr::string("fomod_choices", ctx.mem),
                                                        std::pmr::string("run `fomod inspect <archive>` then re-run with --fomod FILE (or --fomod-defaults)", ctx.mem),
                                                        std::pmr::string("https://www.nexusmods.com/" + std::string(domain) + "/mods/" + std::to_string(mod_id), ctx.mem),
-                                                       std::pmr::string(e.path, ctx.mem)});
+                                                       std::pmr::string(e.path, ctx.mem), std::pmr::string(ctx.mem)});
         } else if (e.code == "nexus_premium") {
             row.status = "pending";
             row.note = "needs a Premium account or an nxm:// link";
             out.pending.push_back(CollectionPendingRow{std::pmr::string(std::to_string(mod_id), ctx.mem), std::pmr::string(ctx.mem), std::pmr::string("manual_download", ctx.mem),
                                                        std::pmr::string("a free Nexus account cannot download this directly; use `nexus download --nxm LINK` then `mods install`", ctx.mem),
                                                        std::pmr::string("https://www.nexusmods.com/" + std::string(domain) + "/mods/" + std::to_string(mod_id) + "?tab=files", ctx.mem),
-                                                       std::pmr::string(ctx.mem)});
+                                                       std::pmr::string(ctx.mem), std::pmr::string(ctx.mem)});
         } else {
             row.status = "failed";
             row.note = std::pmr::string(std::string(e.code) + ": " + e.what(), ctx.mem);

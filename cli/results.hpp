@@ -303,6 +303,7 @@ struct CollectionPendingRow {
     std::pmr::string detail;
     std::pmr::string url;
     std::pmr::string archive;  // 已下载的压缩包（fomod_choices 时可直接 `fomod inspect`）；没有为空
+    std::pmr::string decision;  // 已用 `collection resolve` 记下、等下次 install 生效的决定：skip|fomod_defaults|fomod_choices|archive；没有为空
 };
 struct CollectionInstallData {
     std::pmr::string name;

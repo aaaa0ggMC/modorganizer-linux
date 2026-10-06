@@ -21,8 +21,8 @@ def call(*args, code=0, env=None):
     data = json.loads(result.stdout)
     assert set(data) == {'schema_version', 'ok', 'command', 'data', 'warnings', 'errors'}
     assert data['schema_version'] == 1
-    assert data['ok'] == (code in (0, 3))
-    if code not in (0, 3):
+    assert data['ok'] == (code in (0, 3, 4))  # 3 = 体检有错、4 = 未完成需要输入：数据都有效
+    if code not in (0, 3, 4):
         assert data['data'] is None and data['errors']
     checks += 1
     return data, result
@@ -143,6 +143,27 @@ data, _ = call('-j', '-i', str(root / 'nowhere'), 'next')
 assert data['data']['ready'] is False and data['data']['steps'][0]['id'] == 'instance.init'
 data, _ = call('-j', '-i', str(instance), 'next')
 assert 'ready' in data['data'] and isinstance(data['data']['steps'], list)
+checks += 1
+# collection resolve：位置参数之后的 --fomod-defaults 不能被 --fomod 吞掉；status 给出 decision/kind/url
+with tempfile.TemporaryDirectory(prefix='mol-cli-res-', dir='/tmp') as tmp_r:
+    rr = Path(tmp_r)
+    (rr / 'game').mkdir()
+    ri = rr / 'instance'
+    call('-j', '-i', str(ri), 'instance', 'init', '--game-dir', str(rr / 'game'), '--prefix', str(rr / 'prefix'))
+    (ri / 'collections/abc').mkdir(parents=True)
+    (ri / 'collections/abc/state.json').write_text(json.dumps({'version': 1, 'slug': 'abc', 'name': 'ABC', 'revision': 1,
+        'mods': {'T1': {'name': 'Patch', 'status': 'pending', 'archive': '', 'mod_dir': '', 'note': 'needs choices', 'kind': 'fomod_choices', 'url': 'https://example.invalid/m/1'}},
+        'overrides': {}}))
+    st, _ = call('-j', '-i', str(ri), 'collection', 'status', 'abc', code=4)
+    p0 = st['data']['pending'][0]
+    assert (p0['kind'], p0['url'], p0['decision'], p0['archive']) == ('fomod_choices', 'https://example.invalid/m/1', '', ''), p0
+    data, _ = call('-j', '-i', str(ri), 'collection', 'resolve', 'abc', '--mod', 'T1', '--fomod-defaults')
+    assert data['data']['recorded'] == 'fomod_defaults', data
+    st, _ = call('-j', '-i', str(ri), 'collection', 'status', 'abc', code=4)
+    assert st['data']['pending'][0]['decision'] == 'fomod_defaults'
+    data, _ = call('-j', '-i', str(ri), 'collection', 'resolve', 'abc', '--mod', 'T1', '--skip')
+    st, _ = call('-j', '-i', str(ri), 'collection', 'status', 'abc', code=4)
+    assert st['data']['pending'][0]['decision'] == 'skip'
 checks += 1
 # overview：一次取齐；与单独的 next/doctor 一致（上面的 with 块结束时临时目录已删除，这里自建实例）
 with tempfile.TemporaryDirectory(prefix='mol-cli-ov-', dir='/tmp') as tmp_ov:

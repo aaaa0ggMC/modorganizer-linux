@@ -295,7 +295,9 @@ InstallResult install_archive(const Instance& inst, std::string_view archive_s, 
             }
         }
         res.files = validate_tree(tmp);
-        if (res.files == 0) throw Error("invalid_argument", "the archive contains no files", archive.string());
+        // FOMOD 的选择可以合法地「什么都不装」（例如只含可选补丁、一个都没选）：与 MO2 一致，装成空 mod。
+        // 压缩包本身没有文件才是错误。
+        if (res.files == 0 && !res.fomod) throw Error("invalid_argument", "the archive contains no files", archive.string());
         fs::rename(tmp, target, ec);
         if (ec) throw Error("io_error", "cannot move extracted files into place: " + ec.message(), target.string());
         if (root) mark_mod_root(target.string(), true);
