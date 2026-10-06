@@ -27,7 +27,20 @@ struct LaunchSpec {
 struct LaunchOptions {
     std::string_view steam_app_id = "489830";   // Skyrim SE
     std::span<const std::string_view> args;      // 传给游戏 exe 的参数
+    // 写时复制：非空时经 LD_PRELOAD 注入 libmol-cow.so（见 cow/mol_cow.c），农场里的链接被以写方式打开前
+    // 先换成真实副本，原文件（游戏目录、mod）永远不被改写。空 = 不启用。
+    std::string_view cow_library;
+    std::string_view cow_log;                    // MOL_COW_LOG（overwrite capture 据此丢弃没改动的副本）
 };
+
+// libmol-cow.so 的位置：$MOL_COW_LIB → mo-linux 可执行文件同目录。找不到返回空串。
+string find_cow_library(mr* mem = default_mr());
+
+// Wine 的许多文件操作由 wineserver 代为执行，而 wineserver 会在最后一个程序退出后再存活几秒、被后来者复用。
+// 若这个前缀已有一个**没带同样注入环境**的 wineserver（之前不带 COW 启动的程序留下的），COW 对它不生效，
+// 写入会穿过链接改到原文件。启动前调用：没有 wineserver 或环境一致 → 立即返回；否则最多等 timeout_ms 让它
+// 自行退出；仍在 → Error{wine_busy}。
+void ensure_wineserver_cow(const Instance& inst, std::string_view cow_library, int timeout_ms = 10000);
 
 // exe_rel：相对农场根的可执行文件（如 "skse64_loader.exe"）；以 '/' 开头则当作绝对路径原样使用。不检查文件是否存在（由调用方负责）。
 // cfg.runner_kind == "proton"：<proton_path>/proton run <farm>/<exe>，设置

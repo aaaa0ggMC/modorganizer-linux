@@ -277,14 +277,14 @@ Claude 阶段的提交带 `Co-Authored-By` 与 `Claude-Session`；接续提交�
 | R9 | **plugins.txt / ini / 存档的 profile 同步**：设计已明确、部分已实现。上游 `mappings()`（profile 的 `plugins.txt`/`loadorder.txt` → 游戏 AppData）、`initializeProfile()`、`prepareIni()` 已通过 C ABI 暴露（`mo_game_mappings_json / mo_game_initialize_profile / mo_game_about_to_run`），并在假前缀上实测：`initializeProfile` 复制出正确内容，`prepareIni` 正确追加 `[Launcher] bEnableFileSelection=1` 且保留原有内容。**`plugins sync` 已接线（2026-10-04，真实游戏目录 + 一次性前缀实测：首次 link、二次全 ok、幂等）**；`run` 已自动调用、overwrite 捕获已做（见 §0.1）；仍未做：每 profile 的 ini/存档隔离。原目标：把 `mappings()` 物化为符号链接（游戏写 plugins.txt 时写穿到 profile 文件，与 MO2/usvfs 语义一致）、每 profile 的 ini/存档隔离、overwrite 捕获 | 中 |
 | R10 | **Qt 文件访问不做大小写不敏感**的真实后果：游戏跑过后会生成 `Skyrim.ini`/`SkyrimPrefs.ini`（大写），上游 `initializeProfile` 用 Qt 判断 `skyrim.ini` 是否存在 → 判为不存在 → 回退到游戏默认 ini，忽略用户已有设置。缓解方案（任选其一，待做）：①host 在调用前建一个只含小写别名链接的影子 Documents 目录并临时覆盖 shim 的 Documents 路径（不碰用户前缀）；②core 自己实现这一步 ini 复制 | 中 |
 | R11 | ~~WP8 尚未完整复核~~ **已解决**：当前主仓库完成独立构建、14/14 单测、端到端生命周期和真实 host 的假目录集成；选项/开关由 alib6 解析、日志进 stderr、用法错误不执行变更。 | 已解决 |
-| R13 | **写穿符号链接**：农场里文件是指向游戏目录/mod 原文件的符号链接。游戏若**直接改写**已有文件（非删除重建），修改会落到原文件（游戏目录或 mod 里），不会进 overwrite。usvfs 能拦住，我们拦不住；根治需 FUSE/overlay。Steam「验证文件完整性」可还原游戏目录的被改文件 | 中 |
+| R13 | ~~**写穿符号链接**~~ **已解决（2026-10-06，COW）**：`run` 默认预加载 `libmol-cow.so`，写打开前把链接换成副本（btrfs/xfs reflink，ext4 复制），删除/改名只动农场链接，直接写游戏目录/overwrite 被拒；真实 Wine 9 `cmd` 的 del/ren/move/copy/attrib/追加写都验证过原文件不变（`tests/cow_wine.sh`）。仍有缺口：32 位进程、`futimens` 改时间戳、`--no-cow`。原问题：农场里文件是指向游戏目录/mod 原文件的符号链接。游戏若**直接改写**已有文件（非删除重建），修改会落到原文件（游戏目录或 mod 里），不会进 overwrite。usvfs 能拦住，我们拦不住；根治需 FUSE/overlay。Steam「验证文件完整性」可还原游戏目录的被改文件 | 中 |
 | R14 | `overwrite promote --yes` 是破坏性的、不可撤销的（文件移进真实游戏 Data，不再受我们管理）；目标已存在时跳过不覆盖 | 低 |
 | R15 | FOMOD 只在合成包上测过；与 MO2 的差异：忽略 alwaysInstall/installIfUsable（与 MO2 一致）、`moduleDependencies` 不检查；图片不提取 | 中 |
 | R16 | Nexus 个人 key 仅限个人/测试；公开发布需向 Nexus 注册应用拿 SSO slug（官方流程见 §0.1）。API 限流（日/时额度）已映射为 `nexus_rate_limited` 但未做退避重试 | 中 |
 | R19 | CreateBSA 的清单 Hash 与我们重建的 BSA 不一致（作者打包器的 padding/压缩编码差异）只提示不失败；若某个游戏版本对 padding 字节敏感则会暴露——目前所有真实 BSA 的 padding 都是垃圾值，游戏照常加载 | 低 |
 | R20 | TransformedTexture 的编码质量/mip 滤波与 DirectXTex 不同：BC7 只用 mode 6（单子集）、没有感知误差优化；法线图（BC5/BC7 法线）不做重归一化，色彩空间（sRGB）不做线性空间缩放。视觉上应无明显差异，但极端高频贴图可能略逊 | 低 |
 | R21 | LOOT 近似排序：masterlist 分支固定为 v0.26（404 时回退 master），将来分支名变化要跟；带 condition 的规则被忽略可能漏掉「仅当装了 X 才需要」的顺序约束 | 低 |
-| R22 | 整合包里依赖 usvfs 虚拟文件系统的外部工具（Synthesis、Pandora、BodySlide 的输出写入 overwrite 等）在农场里只能看到合并后的符号链接树；它们写出的新文件会落到农场里的真实文件，`overwrite capture` 会在下次启动前收走，但**工具运行当下**不会实时落进 overwrite | 中 |
+| R22 | **部分解决（COW）**：农场内运行的工具可任意改/删/移文件，结果进 overwrite / overwrite-root。仍有：农场**之外**的工具看不到虚拟 Data。原问题：整合包里依赖 usvfs 虚拟文件系统的外部工具（Synthesis、Pandora、BodySlide 的输出写入 overwrite 等）在农场里只能看到合并后的符号链接树；它们写出的新文件会落到农场里的真实文件，`overwrite capture` 会在下次启动前收走，但**工具运行当下**不会实时落进 overwrite | 中 |
 | R18 | Wabbajack 安装对每个压缩包是「完整解压到临时目录再复制」，大压缩包会短时占双倍磁盘；Nexus 来源按文件名/大小+xxh64 匹配本地缓存，免费账号全部变 pending；清单里的 Nexus `GameName` 直接小写当域名 | 低 |
 | R17 | `skse install` 依赖 Nexus 主文件标记与 SKSE 的 dll 命名规则（`skse64_<a>_<b>_<c>.dll`）；官方改规则时要跟 | 低 |
 | R12 | **alib6 的 4 处修改未提交**，且第 3 点是行为变更；若作者在别处使用了"同时声明破折号别名与 name，并依赖裸 name 匹配"的写法会受影响 | 中 |

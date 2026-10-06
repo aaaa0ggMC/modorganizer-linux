@@ -568,6 +568,15 @@ void apply_farm(const Plan& plan, std::string_view root_sv, const ApplyProgress&
     if (progress && total != 0) progress(total, total);
 }
 
+vector<string> farm_manifest(std::string_view root_sv, mr* mem) {
+    vector<string> out(mem);
+    const fs::path root = to_fs(root_sv);
+    if (!marker_present(root)) return out;
+    Arena arena(mem);
+    for (std::string_view m : load_manifest(root, arena)) out.emplace_back(m);
+    return out;
+}
+
 void remove_farm(std::string_view root_sv) {
     const fs::path root = to_fs(root_sv);
     if (!marker_present(root))

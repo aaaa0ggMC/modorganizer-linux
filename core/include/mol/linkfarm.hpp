@@ -58,6 +58,9 @@ Plan plan_farm(const MergeResult& expected, std::string_view root, mr* mem = def
 using ApplyProgress = std::function<void(std::size_t done, std::size_t total)>;
 void apply_farm(const Plan& plan, std::string_view root, const ApplyProgress& progress = {});
 
+// manifest 里登记的、由我们创建的全部相对路径（字节序）。root 不是农场 → 空。
+vector<string> farm_manifest(std::string_view root, mr* mem = default_mr());
+
 // 清理：删除 manifest 中记录的全部内容，最后删 marker；root 为空则一并删除。
 void remove_farm(std::string_view root);
 

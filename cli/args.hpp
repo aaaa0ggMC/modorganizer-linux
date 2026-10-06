@@ -65,6 +65,8 @@ constexpr OptionSpec kOptRun[] = {
     {"title", "", "--title", "Run the executable registered in the instance (see `executables list`), with its arguments", true},
     {"detach", "", "--detach", "Return right after launching (do not wait; skips overwrite capture)", false},
     {"dry-run", "", "--dry-run", "Print the launch command only; change nothing", false},
+    {"args", "", "--args", "Arguments for the executable (one string, Windows-style quoting)", true},
+    {"no-cow", "", "--no-cow", "Do not inject copy-on-write: writes through farm links change the original files", false},
 };
 constexpr OptionSpec kOptPromote[] = {
     {"filter", "", "--filter", "Glob(s) relative to overwrite/, comma separated, case-insensitive (required)", true},

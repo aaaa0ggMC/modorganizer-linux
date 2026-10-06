@@ -40,6 +40,14 @@ if(CLI_SRC)
   target_link_libraries(mo-linux PRIVATE mocore mol_alib6 ${CMAKE_DL_LIBS})
 endif()
 
+# ---- libmol-cow.so：工具运行时的写时复制（LD_PRELOAD 注入 Wine 进程，见 cow/mol_cow.c）----------
+# 纯 C、只用老 glibc 也有的符号（dlsym 走 libdl），装在 mo-linux 旁边。
+enable_language(C)
+add_library(mol-cow SHARED cow/mol_cow.c)
+set_target_properties(mol-cow PROPERTIES C_STANDARD 11 C_VISIBILITY_PRESET hidden PREFIX "lib" OUTPUT_NAME "mol-cow")
+target_compile_options(mol-cow PRIVATE -Wall -Wextra -O2 -fno-strict-aliasing -U_FORTIFY_SOURCE)
+target_link_libraries(mol-cow PRIVATE ${CMAKE_DL_LIBS})
+
 # ---- tests: tests/test_*.cpp 每个文件一个可执行文件 ----------------------------
 enable_testing()
 file(GLOB TEST_SRC CONFIGURE_DEPENDS tests/test_*.cpp)
@@ -54,6 +62,10 @@ foreach(src ${TEST_SRC})
   endif()
   add_test(NAME ${name} COMMAND ${name})
 endforeach()
+if(TARGET test_cow)
+  add_dependencies(test_cow mol-cow)
+  target_compile_definitions(test_cow PRIVATE MOL_COW_LIB_PATH="$<TARGET_FILE:mol-cow>")
+endif()
 
 # ---- shim 的单元测试（Windows API 的 Linux 实现；host 子工程里也会再编一份给 clang 用）-----
 add_subdirectory(shim)

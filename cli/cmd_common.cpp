@@ -19,6 +19,7 @@ std::string_view default_hint(std::string_view code) {
         {"farm_not_owned", "the farm directory holds files mo-linux did not create; empty it or choose another farm_dir"},
         {"farm_conflict", "a real file sits where a link must go; run `mo-linux overwrite capture`, or remove the file"},
         {"farm_busy", "the game is still running: ask the user to close it, then retry"},
+        {"wine_busy", "another Wine program in this prefix is still running (or just exited); wait a few seconds and retry, or close it. `--no-cow` runs without protection (writes change the original files)"},
         {"io_error", "check the path named in the error (permissions, disk space)"},
         {"game_unavailable", "libmo-game.so was not found or failed to load: set MOL_GAME_LIB or build with MOL_BUILD_HOST=ON"},
         {"network_error", "check the network (set https_proxy if needed) and retry"},

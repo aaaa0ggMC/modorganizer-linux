@@ -580,6 +580,10 @@ struct RunData {
     std::size_t captured = 0;  // 移回 overwrite 的文件数（启动前残留 + 退出后）
     std::pmr::vector<std::pmr::string> argv;
     std::pmr::string cwd;
+    bool cow = false;              // 注入了写时复制（libmol-cow.so）
+    std::pmr::string cow_library;  // 注入的库；空 = 没有启用（--no-cow 或找不到库）
+    std::size_t cow_copies = 0;    // 本次运行中被换成副本的农场链接数（含只读打开写模式、最后没改的）
+    std::size_t cow_reflinked = 0; // 其中走 reflink 的（btrfs/xfs 上应等于 cow_copies；ext4 上为 0）
 };
 
 // ---- plan / status / apply / unlink ---------------------------------------
