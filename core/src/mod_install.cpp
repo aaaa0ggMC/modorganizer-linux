@@ -7,6 +7,7 @@
 
 #include <algorithm>
 #include <filesystem>
+#include <map>
 #include <string>
 #include <system_error>
 #include <vector>
@@ -168,6 +169,18 @@ std::function<std::string(std::string_view)> make_file_state(const Instance& ins
 }
 }  // namespace
 
+std::string sanitize_mod_name(std::string_view name) { return sanitize(std::string(name)); }
+
+bool mod_name_taken(const Instance& inst, std::string_view name_in, std::string_view profile) {
+    const std::string want = std::string(casefold(sanitize(std::string(name_in))));
+    std::error_code ec;
+    for (fs::directory_iterator it(fs::path(std::string(inst.mods_dir)), ec), end; !ec && it != end; it.increment(ec))
+        if (std::string(casefold(it->path().filename().string())) == want) return true;
+    for (const auto& m : list_mods(inst, profile))
+        if (std::string(casefold(m.name)) == want) return true;
+    return false;
+}
+
 void extract_archive(std::string_view archive, std::string_view dest) { extract(fs::path(std::string(archive)), fs::path(std::string(dest))); }
 
 void reorder_mods(const Instance& inst, std::span<const string> names, std::string_view profile) {
@@ -282,7 +295,9 @@ InstallResult install_archive(const Instance& inst, std::string_view archive_s, 
             }
         }
         res.files = validate_tree(tmp);
-        if (res.files == 0) throw Error("invalid_argument", "the archive contains no files", archive.string());
+        // FOMOD 的选择可以合法地「什么都不装」（例如只含可选补丁、一个都没选）：与 MO2 一致，装成空 mod。
+        // 压缩包本身没有文件才是错误。
+        if (res.files == 0 && !res.fomod) throw Error("invalid_argument", "the archive contains no files", archive.string());
         fs::rename(tmp, target, ec);
         if (ec) throw Error("io_error", "cannot move extracted files into place: " + ec.message(), target.string());
         if (root) mark_mod_root(target.string(), true);
@@ -336,6 +351,68 @@ std::optional<fomod::Config> read_archive_fomod(const Instance& inst, std::strin
         fs::remove_all(tmp, ec);
         throw;
     }
+}
+
+std::map<std::string, std::string> extract_fomod_images(const Instance& inst, std::string_view archive_s, const std::vector<std::string>& images,
+                                                        std::string_view dest_s) {
+    std::map<std::string, std::string> out;
+    const fs::path archive{std::string(archive_s)};
+    std::error_code ec;
+    if (!fs::is_regular_file(archive, ec)) throw Error("invalid_argument", "archive not found", archive.string());
+    const char* tool = which("7z") ? "7z" : which("7zz") ? "7zz" : nullptr;
+    if (!tool || images.empty()) return out;
+
+    // 配置里的路径：反斜杠 → '/'，去掉开头的 "./" 与 '/'；拒绝 ".."（只用来匹配，但不让奇怪的路径进命令行）
+    auto norm = [](std::string p) {
+        for (auto& c : p) if (c == '\\') c = '/';
+        while (p.starts_with("./")) p.erase(0, 2);
+        while (!p.empty() && p.front() == '/') p.erase(0, 1);
+        return p;
+    };
+    std::vector<std::pair<std::string, std::string>> want;  // 原样 → 规范化
+    for (const auto& img : images) {
+        const std::string n = norm(img);
+        if (n.empty() || n.find("..") != std::string::npos || n.find('*') != std::string::npos || n.find('?') != std::string::npos) continue;
+        if (std::none_of(want.begin(), want.end(), [&](const auto& w) { return w.first == img; })) want.emplace_back(img, n);
+    }
+    if (want.empty()) return out;
+
+    const fs::path tmp = fs::path(std::string(inst.downloads_dir)) / (".mol-fomod-img-" + std::to_string(::getpid()));
+    fs::remove_all(tmp, ec);
+    fs::create_directories(tmp, ec);
+    try {
+        std::vector<std::string> argv{tool, "x", "-y", "-bd", "-ssc-", "-o" + tmp.string(), archive.string()};
+        for (const auto& [orig, n] : want) {
+            argv.push_back("-i!" + n);    // 模块根就是压缩包根
+            argv.push_back("-i!*/" + n);  // 外面还包了一层目录
+        }
+        (void)run(argv);  // 部分图片不存在时 7z 也可能非 0：以实际解出的文件为准
+        validate_tree(tmp);
+        // 解出的文件：小写相对路径 → 绝对路径
+        std::vector<std::pair<std::string, fs::path>> got;
+        for (fs::recursive_directory_iterator it(tmp, ec), end; !ec && it != end; it.increment(ec)) {
+            if (!it->is_regular_file(ec)) continue;
+            got.emplace_back(std::string(casefold(fs::relative(it->path(), tmp, ec).generic_string())), it->path());
+        }
+        fs::create_directories(fs::path(std::string(dest_s)), ec);
+        std::size_t idx = 0;
+        for (const auto& [orig, n] : want) {
+            const std::string key = std::string(casefold(n));
+            const fs::path* hit = nullptr;
+            for (const auto& [rel, abs] : got)
+                if (rel == key || (rel.size() > key.size() && rel.ends_with(key) && rel[rel.size() - key.size() - 1] == '/')) { hit = &abs; break; }
+            if (!hit) continue;
+            // 平铺到 dest：序号 + 原文件名（不同目录下的同名图片不会互相覆盖）
+            const fs::path dst = fs::path(std::string(dest_s)) / (std::to_string(idx++) + "-" + sanitize(hit->filename().string()));
+            fs::copy_file(*hit, dst, fs::copy_options::overwrite_existing, ec);
+            if (!ec) out[orig] = fs::absolute(dst, ec).string();
+        }
+        fs::remove_all(tmp, ec);
+    } catch (...) {
+        fs::remove_all(tmp, ec);
+        throw;
+    }
+    return out;
 }
 
 }  // namespace mol

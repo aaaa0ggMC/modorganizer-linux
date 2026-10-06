@@ -21,7 +21,7 @@
 
 ## 进度事件（`--events`）
 每行一个 JSON：`{"event":"progress","op":"apply","done":120,"total":5000}`；开始 `{"event":"start","op":"apply"}`；结束 `{"event":"done","op":"apply","ok":true}`（运行失败时为 `ok:false`）。
-`progress` 至多每 50ms 或每 1% 发一次；对端关闭管道（EPIPE）时静默停止发送，命令照常完成。`fifo:`：不存在则 mkfifo，以非阻塞写打开，无读端则放弃（不阻塞命令）。`unix:`：connect 失败则放弃。`fd:`：直接 write。
+`progress` 可带 `item`（当前处理的条目，如集合里正在下载/安装的 mod 名：`{"event":"progress","op":"install","done":3,"total":68,"item":"SkyUI"}`），item 变化的那一次不节流；`progress` 至多每 50ms 或每 1% 发一次；对端关闭管道（EPIPE）时静默停止发送，命令照常完成。`fifo:`：不存在则 mkfifo，以非阻塞写打开，无读端则放弃（不阻塞命令）。`unix:`：connect 失败则放弃。`fd:`：直接 write。
 
 ## 命令
 - `instance init [--game-dir G] [--prefix P] [--prefix-user U] [--runner proton|wine] [--proton-path X] [--steam-root S] [--profile N]`
@@ -61,13 +61,14 @@
 - Nexus 错误码：`nexus_auth`(401) `nexus_premium`(403) `nexus_not_found`(404) `nexus_rate_limited`(429，含 Retry-After) `network_error`。基址可用 `MOL_NEXUS_API` 覆盖（测试用）。遵循 http(s)_proxy 环境变量。
 
 - `mods install ARCHIVE [--name N] [--root]`  把压缩包装成 `mods/<name>/` 并以最高优先级启用写入 modlist。解压用外部 `7z`/`7zz`/`bsdtar`（拒绝含符号链接/越界路径的包）；自动去掉多余的单层外壳目录；顶层有 `.exe/.dll` → **根目录型 mod**；只有一个顶层目录时，若它（或其内容）已经是游戏数据目录（`SKSE/`、`meshes/`、`scripts/`……，名单与上游 SkyrimSEModDataChecker 一致）则原样保留，否则当作外壳剥掉（`meta.ini` 写 `mol_root=true`，映射到农场根而非 `Data/`，例如 SKSE64）；顶层只有 `Data/` → 取其内容。已有同名 mod 拒绝。data：`{name,path,root,files}`。`mods list` 的每行多了 `root`。mod 根下的 `meta.ini` 不会进农场。FOMOD：压缩包带 `fomod/ModuleConfig.xml` 时必须指明处理方式，否则报 `fomod_choices_required`：`--fomod CHOICES.json`（显式选择；可见的组缺失则报错）、`--fomod-defaults`（全用默认）、`--no-fomod`（忽略安装器，原样装）。三者互斥。data 多了 `fomod`（是否走了 FOMOD）与 `missing`（FOMOD 引用但压缩包里没有的源，同时进 warnings `fomod_missing_source`）。
-- `fomod inspect ARCHIVE [--choices FILE]`  只读。data：`{has_fomod,module_name,steps:[{name,visible,groups:[{name,type,explicit_choice,plugins:[{name,description,image,type,selected}]}]}],files:[{source,destination,folder,priority}]}`。`--choices` 给部分/全部选择，未给的组用默认；步骤可见性与插件类型按**此前步骤设置的标志**求值，所以 GUI 每改一次选择就带累计的 choices 再调一次。choices 文件格式：`{"steps":{"<步骤名>":{"<组名>":["<插件名>",…]}}}`。
+- `fomod inspect ARCHIVE [--choices FILE] [--images DIR]`  只读（`--images` 只往 DIR 写图片）。data：`{has_fomod,module_name,steps:[{name,visible,groups:[{name,type,explicit_choice,plugins:[{name,description,image,image_path,type,selected}]}]}],files:[{source,destination,folder,priority}]}`。`--images DIR`：把各选项引用的图片（路径相对模块根、大小写不敏感）解到 DIR，`image_path` 是解出的绝对路径（解不出为空）；只解图片，不解整个压缩包，需要 7z/7zz。`--choices` 给部分/全部选择，未给的组用默认；步骤可见性与插件类型按**此前步骤设置的标志**求值，所以 GUI 每改一次选择就带累计的 choices 再调一次。choices 文件格式：`{"steps":{"<步骤名>":{"<组名>":["<插件名>",…]}}}`。
 - `skse install`  一键：由游戏版本推出运行时 dll（`skse64_<a>_<b>_<c>.dll`）→ 已就绪则不做任何事 → 否则在 Nexus（mod 30379）选主文件，下载（已下载则复用），装为根目录型 mod `SKSE64` → 校验 dll 与游戏匹配。需要 Nexus API key 与游戏层 host 库。幂等。错误码 `skse_mismatch`：最新的 SKSE64 还不支持该游戏版本。data：`{game_version,runtime_dll,installed,mod_name,file_name,file_id,downloaded}`。
 
 ### 面向 Agent 的命令（详见 docs/AGENT.md）
 
 - `schema`  自描述。data：`{tool,version,envelope,exit_codes,errors:[{code,hint}],global_options,commands:[{name,summary,effects[],needs[],confirm,idempotent,positionals[],options[{name,long,short,takes_value,description}]}]}`。`effects` ∈ `read|instance|farm|prefix|game_dir|launch|network`；`needs` ∈ `instance|nexus_key|host`；`confirm:true` = 执行前应向用户确认（`run`、`overwrite promote`）。
 - `next`  只读。data：`{ready,instance,steps:[{id,why,command[],effects,blocking,needs_human,confirm}]}`。来源：`doctor` 的各项检查（带 `fix` 的给出可直接执行的 argv，没有 `fix` 的 `needs_human:true`）、未完成的集合安装、缺少 Nexus key。`ready` = 没有 blocking 步骤；此时最后一步是 `run`（`confirm:true`）。没有实例时第一步是 `instance init`。
+- `overview`  只读，给 GUI 概览页用：一次取齐、同一进程里 doctor 与游戏层各只跑一次（代替 `version`+`instance show`+`doctor`+`next`+`mods list`+`plugins list` 的多进程往返）。data：`{version,has_instance,instance,profile,game_dir,game_version,farm_path,nexus_key,mods_total,mods_enabled,mods_missing,plugins_total,plugins_enabled,collections:[{slug,name,revision,installed,pending,failed,skipped}],doctor:<同 doctor 的 data>,next:<同 next 的 data>}`。没有实例时 `has_instance:false`，实例字段为空、`doctor.checks` 为空、`next` 只有 `instance init`。`nexus_key` 只表示有 key（不联网验证）。退出码恒为 0（doctor 的 error 体现在 `doctor.errors`）。
 - `logs [--file NAME] [--tail N]`  只读。列出前缀里 `My Games/Skyrim Special Edition/SKSE/` 的日志文件（新→旧），或读取其中一个的最后 N 行（默认 80、最多 2000）。data：`{dir,files:[{name,size,modified}],name,tail}`。`NAME` 只能是目录内的纯文件名。
 - 所有错误条目（`errors[]`）与警告多了 `hint` 字段：对该错误码的默认下一步建议。`doctor` 的每项检查多了 `fix`（argv 数组，空 = 需要人处理）。
 
@@ -79,6 +80,7 @@
 
 ### Nexus 搜索与按 id 安装
 
+- 只读的搜索/详情（`nexus search`、`nexus info`、`collection search`）不需要实例：没有实例时按 Skyrim SE 搜，「已安装」一律为 false。
 - `nexus search QUERY [--sort relevance|endorsements|downloads|updatedAt] [--count N≤50] [--offset N]`  搜当前游戏的 mod（QUERY 用站内词干匹配；传空串列出榜单）。data：`{game,query,sort,total,mods:[{mod_id,name,author,summary,version,updated_at,endorsements,downloads,installed}]}`；`installed` = 本实例里已有来自该 mod 的安装（靠 meta.ini 的 `modid`）。
 - `nexus info --mod ID`  data：`{mod:{…同上},category,requirements:[{mod_id,name,external,url,notes,installed}],dlc_requirements:[…]}`。`requirements` 是作者在站内声明的前置（`external:true` 的是站外工具，`url` 给出下载页）。
 - `nexus install --mod ID [--file ID] [--name N] [--requirements] [--fomod F | --fomod-defaults | --no-fomod]`  取主文件（`is_primary` 优先）→ 下载 → 安装 → 写 MO2 兼容的 `meta.ini`（`gameName/modid/fileid`）。目录名默认取站内 mod 名。`--requirements` 递归先装站内前置（深度 ≤4，已装的跳过，自动用 FOMOD 默认值）。**幂等**：已装过（meta.ini 的 modid 匹配）直接 `already_installed`。data：`{status:"complete"|"incomplete",mods:[{mod_id,name,status,mod_dir,note}],pending:[…同 collection 的 pending],external_requirements:[…],dlc_requirements:[…]}`；FOMOD 缺选择/免费账号无法直连 → pending + 退出码 4（与 collection 相同的「incomplete」协议）。
@@ -101,8 +103,10 @@
 mo-linux 不能在中途向用户提问，所以统一用「**可续跑 + 返回 incomplete**」：每个需要人介入的 mod 记为 pending（不阻塞、不猜测），其余 mod 继续处理；命令最后返回退出码 4 与 pending 清单。用户（或 GUI）用 `collection resolve` 记下决定，再跑一次 `collection install` 即从中断处继续（状态存 `<实例>/collections/<slug>/state.json`，每个 mod 处理完立即落盘；已装好的不会重做，已下载的按「大小+md5」复用，无需联网）。
 
 - `collection inspect COLLECTION [--revision N]`  只读（需要 Nexus key）。COLLECTION 可以是 slug、集合页面 URL（`https://www.nexusmods.com/games/<游戏>/collections/<slug>`）或本地 `collection.json`/清单压缩包。data：`{name,slug,author,domain,revision,game_versions,game_version(本机),mod_count,total_size,plugin_count,rule_count,install_instructions,mods:[{key,name,version,optional,source_type,mod_id,file_id,has_fomod_choices,has_patches,status}]}`，mods 按安装顺序；`status` ∈ `new|pending|installed|skipped|failed`。
-- `collection install COLLECTION [--revision N] [--no-optional] [--fomod-defaults] [--jobs N] [-p PROFILE]`  下载（Premium 直连；需要 key）→ md5 校验（不符则删文件并 failed）→ 安装（FOMOD 选择取自清单）→ 按安装顺序（phase、`before/after` 规则）放到 modlist 最高优先级 → 应用清单的插件顺序与启用状态。`-p` 指定装进哪个 profile（不存在则创建；默认当前 profile）。data：`{name,slug,revision,profile,status:"complete"|"incomplete",installed,skipped,failed,plugins_applied,mods:[{key,name,status,mod_dir,note}],pending:[{key,name,kind,detail,url}],notes:[…]}`。**未完成时退出码 4**。`failed`（网络错误、md5 不符等）在下次运行时自动重试。清单与实际游戏版本不一致、有未强制执行的 requires/conflicts 规则时进 `notes`（同时是 warnings `collection_note`）。
-  - pending 的 `kind`：`manual_download`（免费账号/浏览器/手动来源；`url` 是页面）｜`fomod_choices`（压缩包有 FOMOD 但清单没给选择，或清单的选择与压缩包对不上）｜`unsupported`（带二进制补丁 patches 的 mod、bundle 来源）。
+- `collection install COLLECTION [--revision N] [--no-optional] [--fomod-defaults] [--jobs N] [-p PROFILE]`  下载（Premium 直连；需要 key）→ md5 校验（不符则删文件并 failed）→ 安装（FOMOD 选择取自清单）→ 按安装顺序（phase、`before/after` 规则）放到 modlist 最高优先级 → 应用清单的插件顺序与启用状态。`-p` 指定装进哪个 profile（不存在则创建；默认当前 profile）。data：`{name,slug,revision,profile,status:"complete"|"incomplete",installed,skipped,failed,plugins_applied,mods:[{key,name,status,mod_dir,note}],pending:[{key,name,kind,detail,url,archive,decision}],notes:[…]}`。**未完成时退出码 4**。`failed`（网络错误、md5 不符等）在下次运行时自动重试。清单与实际游戏版本不一致、有未强制执行的 requires/conflicts 规则时进 `notes`（同时是 warnings `collection_note`）。
+  - pending 的 `kind`：`manual_download`（免费账号/浏览器/手动来源；`url` 是页面）｜`fomod_choices`（压缩包有 FOMOD 但清单没给选择，或清单的选择与压缩包对不上；`archive` 是已下载的压缩包，可直接 `fomod inspect`）｜`unsupported`（带二进制补丁 patches 的 mod、bundle 来源）｜`skse`（清单里的 SKSE64 是 silverlock.org 外部来源：执行 `skse install` 后再 `collection install`；实例里已有 SKSE（游戏目录或根目录型 mod 提供 `skse64_loader.exe`）则直接算 installed）。`decision`（仅 `collection status`）：已用 `collection resolve` 记下、等下次 install 生效的决定（`skip`/`fomod_defaults`/`fomod_choices`/`archive`），没有为空。`kind`/`url` 记在 state.json 里，`collection status` 也给出（旧状态文件里没有时 `kind` 为 `pending`）。
+  - 同一个 Nexus 文件已经装在实例里（另一个集合、`nexus install`、MO2；按 `meta.ini` 的 `modid`/`fileid`）→ 直接复用该目录，`note` 为 `already installed (same Nexus file)`。目录名冲突按清理后的名字、大小写不敏感判断，冲突时加 ` [tag]` 后缀。
+  - 清单记录的 FOMOD 选择里若有 `NotUsable` 插件（Vortex 会把 SelectAll 组里只有说明文字的「介绍」页记成已选），按 MO2 语义忽略它，组的数量约束照常检查。
 - `collection status COLLECTION`  只读、离线。data 同 install（来自 state.json）；未完成时退出码 4。
 - `collection resolve COLLECTION --mod KEY (--skip | --fomod FILE | --fomod-defaults | --archive FILE | --nxm URL)`  记下对某个 pending mod 的决定（KEY 取 pending 里的 `key`，即清单里的 mod tag）。`--nxm` 会立刻用该链接下载文件（链接的 mod/file id 必须与清单一致），随后 `collection install` 按 md5 找到并安装；`--archive` 是用户自己的文件（不做 md5 校验）。
 

@@ -12,14 +12,6 @@ import std;
 
 namespace cli {
 
-namespace {
-
-// 单个子 Plan 的最大 op 数：apply_instance 是整体调用，所以按批切分、
-// 批与批之间发 progress（docs/CLI.md §进度事件）。
-constexpr std::size_t kApplyBatchOps = 256;
-
-}  // namespace
-
 Result run_apply(Context& ctx) {
     EventSink* sink = ctx.sink;
     if (sink != nullptr) sink->start("apply");
@@ -33,19 +25,11 @@ Result run_apply(Context& ctx) {
         const bool needs_marker = !path_exists(std::string(inst.farm_path) + "/.mol-farm.json");
 
         // 空游戏目录也要能创建受管理的农场；已同步的农场避免重写 marker。
-        if (total == 0 && needs_marker) mol::apply_instance(inst, plan);
-        std::size_t done = 0;
-        for (std::size_t i = 0; i < total; i += kApplyBatchOps) {
-            const std::size_t n = std::min(kApplyBatchOps, total - i);
-            mol::Plan batch(ctx.mem);
-            batch.ops.reserve(n);
-            for (std::size_t j = 0; j < n; ++j) {
-                batch.ops.push_back(plan.ops[i + j]);
-            }
-            mol::apply_instance(inst, batch);
-            done += n;
-            if (sink != nullptr) sink->progress("apply", done, total);
-        }
+        // 整个 plan 一次执行（manifest 只读写一次），进度由 apply_farm 按批回调。
+        if (total != 0 || needs_marker)
+            mol::apply_instance(inst, plan, [sink](std::size_t done, std::size_t all) {
+                if (sink != nullptr) sink->progress("apply", done, all);
+            });
         Result r(ctx.mem);
         r.ok = true;
         r.exit_code = 0;

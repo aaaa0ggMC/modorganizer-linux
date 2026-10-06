@@ -155,11 +155,14 @@ struct FarmModel {
 };
 // cfg.game_dir 为空或不存在 → Error{config_invalid}。
 FarmModel build_farm_model(const Instance& inst, std::string_view profile = {}, mr* mem = default_mr());
+// 只含 Data/ 顶层条目的模型（层号、layer_names 与 build_farm_model 一致；用于插件列表这类只看 Data/ 顶层的场合，
+// 不遍历整棵树）。注意：子目录不展开，冲突/告警信息不完整。
+FarmModel build_data_top_model(const Instance& inst, std::string_view profile = {}, mr* mem = default_mr());
 
 // 便捷：build_farm_model + plan_farm(inst.farm_path)。plan_farm 抛出的 runtime_error 被翻译成
 // Error{farm_not_owned / farm_conflict}（按其 message 判断：含 "not empty"→farm_not_owned，含 "refusing"→farm_conflict）。
 Plan plan_instance(const Instance& inst, const FarmModel& model, mr* mem = default_mr());
 // apply_farm 的薄封装，io 失败翻译为 Error{io_error}。
-void apply_instance(const Instance& inst, const Plan& plan);
+void apply_instance(const Instance& inst, const Plan& plan, const ApplyProgress& progress = {});
 
 }  // namespace mol

@@ -116,11 +116,8 @@ Result run_schema(Context& ctx) {
     return r;
 }
 
-Result run_next(Context& ctx) {
-    Result r(ctx.mem);
-    r.ok = true;
-    r.exit_code = 0;
-    r.command = ctx.command;
+// checks：已算好的 doctor 结果（overview 复用，避免同一进程跑两遍体检）；nullptr = 这里自己跑。
+NextData next_data(Context& ctx, const mol::Instance* inst, const mol::vector<mol::Check>* checks) {
     NextData d{.ready = false, .instance = std::pmr::string(ctx.instance_dir, ctx.mem), .steps = std::pmr::vector<NextStep>(ctx.mem)};
     auto add = [&](std::string_view id, std::string_view why, std::initializer_list<std::string_view> cmd, std::string_view effects, bool blocking, bool human, bool confirm) {
         NextStep s{.id = std::pmr::string(id, ctx.mem), .why = std::pmr::string(why, ctx.mem), .command = std::pmr::vector<std::pmr::string>(ctx.mem),
@@ -130,23 +127,20 @@ Result run_next(Context& ctx) {
     };
     auto finish = [&] {
         d.ready = std::none_of(d.steps.begin(), d.steps.end(), [](const NextStep& s) { return s.blocking; });
-        r.set_data(std::move(d));
-        return r;
+        return std::move(d);
     };
 
-    std::optional<mol::Instance> inst;
-    try {
-        inst = mol::load_instance(ctx.instance_dir, ctx.profile_override(), ctx.mem);
-    } catch (const mol::Error& e) {
-        if (e.code != "instance_not_found") throw;
-    }
     if (!inst) {
         add("instance.init", "no instance here; this creates one and auto-detects the Steam game, Proton and prefix", {"instance", "init"}, "instance", true, false, false);
         return finish();
     }
 
-    std::string gv = game_info_string(ctx, *inst, "version");
-    for (const auto& c : mol::run_doctor(*inst, gv, ctx.mem)) {
+    mol::vector<mol::Check> own(ctx.mem);
+    if (!checks) {
+        own = mol::run_doctor(*inst, game_info_string(ctx, *inst, "version"), ctx.mem);
+        checks = &own;
+    }
+    for (const auto& c : *checks) {
         if (c.level == "ok") continue;
         const bool blocking = c.level == "error" || c.id == "farm.busy";  // 游戏还在跑时不能 apply/run
         if (!c.fix.empty()) {
@@ -204,6 +198,21 @@ Result run_next(Context& ctx) {
         else add("run", "everything checks out; start the game (this launches the game: confirm with the user first)", {"run", "--detach"}, "instance,farm,prefix,launch", false, false, true);
     }
     return finish();
+}
+
+Result run_next(Context& ctx) {
+    std::optional<mol::Instance> inst;
+    try {
+        inst = mol::load_instance(ctx.instance_dir, ctx.profile_override(), ctx.mem);
+    } catch (const mol::Error& e) {
+        if (e.code != "instance_not_found") throw;
+    }
+    Result r(ctx.mem);
+    r.ok = true;
+    r.exit_code = 0;
+    r.command = ctx.command;
+    r.set_data(next_data(ctx, inst ? &*inst : nullptr, nullptr));
+    return r;
 }
 
 Result run_logs(Context& ctx) {

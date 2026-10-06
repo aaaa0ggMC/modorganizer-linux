@@ -9,6 +9,7 @@
 
 #include <algorithm>
 #include <array>
+#include <chrono>
 #include <cstddef>
 #include <cstring>
 #include <filesystem>
@@ -21,6 +22,10 @@
 #include <utility>
 #include <vector>
 
+#include <dirent.h>
+#include <fcntl.h>
+#include <sys/stat.h>
+#include <unistd.h>
 
 import alib6;
 
@@ -71,42 +76,63 @@ struct ActualEntry {
 };
 
 // 不跟随符号链接递归；root 不存在（含断链）→ 空。
+// openat + d_type 遍历：链接用 readlinkat 读目标，普通文件/目录不需要 stat（农场里绝大多数是链接）。
+void walk_actual(int dfd, std::string& rel, std::pmr::vector<ActualEntry>& out, Arena& a, std::vector<char>& buf) {
+    DIR* d = ::fdopendir(dfd);
+    if (!d) {
+        ::close(dfd);
+        return;
+    }
+    const std::size_t base = rel.size();
+    while (const dirent* de = ::readdir(d)) {
+        const std::string_view name(de->d_name);
+        if (name == "." || name == "..") continue;
+        unsigned char t = de->d_type;
+        if (t == DT_UNKNOWN) {
+            struct stat st {};
+            if (::fstatat(dfd, de->d_name, &st, AT_SYMLINK_NOFOLLOW) != 0) t = DT_UNKNOWN;
+            else t = S_ISLNK(st.st_mode) ? DT_LNK : S_ISDIR(st.st_mode) ? DT_DIR : DT_REG;
+        }
+        if (!rel.empty()) rel.push_back('/');
+        rel.append(name);
+        ActualEntry e;
+        e.rel = a.dup(rel);
+        if (t == DT_LNK) {
+            e.kind = ActualKind::Symlink;
+            for (;;) {
+                const ssize_t n = ::readlinkat(dfd, de->d_name, buf.data(), buf.size());
+                if (n < 0) break;
+                if (static_cast<std::size_t>(n) < buf.size()) {
+                    e.target = a.dup(std::string_view(buf.data(), static_cast<std::size_t>(n)));
+                    break;
+                }
+                buf.resize(buf.size() * 2);
+            }
+        } else if (t == DT_DIR) {
+            e.kind = ActualKind::Dir;
+        } else if (t != DT_UNKNOWN) {
+            e.kind = ActualKind::File;
+        }
+        out.push_back(e);
+        if (t == DT_DIR) {
+            const int sub = ::openat(dfd, de->d_name, O_RDONLY | O_DIRECTORY | O_NOFOLLOW | O_CLOEXEC);
+            if (sub >= 0) walk_actual(sub, rel, out, a, buf);  // 打不开（权限）则跳过
+        }
+        rel.resize(base);
+    }
+    ::closedir(d);
+}
+
 std::pmr::vector<ActualEntry> scan_actual(const fs::path& root, Arena& a) {
     std::pmr::vector<ActualEntry> out(a.get());
     std::error_code ec;
     fs::file_status st = fs::symlink_status(root, ec);
     if (ec || !fs::exists(st)) return out;
-
-    std::string prefix = root.generic_string();
-    if (prefix.empty() || prefix.back() != '/') prefix += '/';
-
-    // 默认不跟随目录符号链接；skip_permission_denied 保证不会因权限中断。
-    fs::recursive_directory_iterator it(root, fs::directory_options::skip_permission_denied, ec), end;
-    if (ec) return out;
-    while (it != end) {
-        const fs::path p = it->path();
-        const std::string g = p.generic_string();
-        if (g.size() > prefix.size() && g.compare(0, prefix.size(), prefix) == 0) {
-            ActualEntry e;
-            e.rel = a.dup(std::string_view(g).substr(prefix.size()));
-            std::error_code sec;
-            fs::file_status fst = fs::symlink_status(p, sec);
-            if (!sec) {
-                if (fs::is_symlink(fst)) {
-                    e.kind = ActualKind::Symlink;
-                    fs::path tgt = fs::read_symlink(p, sec);
-                    if (!sec) e.target = a.dup(tgt.generic_string());
-                } else if (fs::is_directory(fst)) {
-                    e.kind = ActualKind::Dir;
-                } else {
-                    e.kind = ActualKind::File;
-                }
-            }
-            out.push_back(e);
-        }
-        it.increment(ec);
-        if (ec) break;
-    }
+    const int fd = ::open(root.c_str(), O_RDONLY | O_DIRECTORY | O_CLOEXEC);
+    if (fd < 0) return out;
+    std::string rel;
+    std::vector<char> buf(4096);
+    walk_actual(fd, rel, out, a, buf);
     std::sort(out.begin(), out.end(),
               [](const ActualEntry& x, const ActualEntry& y) { return x.rel < y.rel; });
     return out;
@@ -381,7 +407,7 @@ Plan plan_farm(const MergeResult& expected, std::string_view root_sv, mr* mem) {
     return plan;
 }
 
-void apply_farm(const Plan& plan, std::string_view root_sv) {
+void apply_farm(const Plan& plan, std::string_view root_sv, const ApplyProgress& progress) {
     const fs::path root = to_fs(root_sv);
 
     std::error_code ec;
@@ -427,7 +453,20 @@ void apply_farm(const Plan& plan, std::string_view root_sv) {
             i = end + 1;
         }
     };
+    const std::string root_prefix = root.native() + "/";
+    std::string full_buf;
     auto do_link = [&](const Op& op, const fs::path& full) {
+        // 快路径：plan 已确认该处为空（Link），父目录也由先行的 Mkdir 建好——直接 symlink，
+        // 省掉逐级 stat 与预先的 lstat。目标已存在或父目录缺失时退回下面的完整逻辑。
+        if (op.kind == OpKind::Link) {
+            full_buf.assign(root_prefix);
+            full_buf.append(op.path);
+            const std::string tgt(op.target);
+            if (::symlink(tgt.c_str(), full_buf.c_str()) == 0) {
+                created.emplace(set_key(op.path));
+                return;
+            }
+        }
         std::error_code sec;
         fs::file_status st = fs::symlink_status(full, sec);
         if (!sec && fs::exists(st)) {
@@ -451,7 +490,20 @@ void apply_farm(const Plan& plan, std::string_view root_sv) {
         created.emplace(set_key(op.path));
     };
 
+    constexpr std::size_t kProgressEvery = 256;
+    const std::size_t total = plan.ops.size();
+    auto last_checkpoint = std::chrono::steady_clock::now();
+    std::size_t done = 0;
     for (const auto& op : plan.ops) {
+        if (done != 0 && done % kProgressEvery == 0) {
+            if (progress) progress(done, total);
+            const auto now = std::chrono::steady_clock::now();
+            if (now - last_checkpoint >= std::chrono::seconds(1)) {
+                commit();  // 检查点：被中途杀掉时，已创建的链接仍记在 manifest 里，下次 plan 能接手
+                last_checkpoint = now;
+            }
+        }
+        ++done;
         try {
             const fs::path full = root / to_fs(op.path);
             switch (op.kind) {
@@ -513,6 +565,7 @@ void apply_farm(const Plan& plan, std::string_view root_sv) {
         }
     }
     commit();
+    if (progress && total != 0) progress(total, total);
 }
 
 void remove_farm(std::string_view root_sv) {

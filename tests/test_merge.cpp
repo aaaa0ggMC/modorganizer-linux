@@ -183,6 +183,14 @@ TEST(casefold_ascii_only) {
     CHECK(mol::casefold(raw) == "data/\xc3\x9cml\xc3\xa4ut.dds");
 }
 
+TEST(html_unescape_names) {
+    CHECK_EQ(std::string(mol::html_unescape("JK&#39;s Skyhaven forge V1")), std::string("JK's Skyhaven forge V1"));
+    CHECK_EQ(std::string(mol::html_unescape("A &amp; B &lt;x&gt; &quot;q&quot; &apos;")), std::string("A & B <x> \"q\" '"));
+    CHECK_EQ(std::string(mol::html_unescape("&#x4E2D;&#25991;")), std::string("\u4E2D\u6587"));
+    // 不认识的、不完整的、越界的保持原样
+    CHECK_EQ(std::string(mol::html_unescape("R&D &bogus; &#; &#xZZ; & tail &#1114112;")), std::string("R&D &bogus; &#; &#xZZ; & tail &#1114112;"));
+}
+
 TEST(casefold_uses_supplied_resource) {
     RecordingMr rec;
     mol::string s = mol::casefold("a long enough path to defeat short string optimization", &rec);
@@ -506,6 +514,36 @@ TEST(scan_layer_basic) {
     for (const mol::ScanEntry& e : got) {
         CHECK(e.rel.find("linkdir/") == std::string_view::npos);
     }
+}
+
+TEST(scan_layer_types_and_top_only) {
+    TempDir tmp;
+    tmp.touch("Textures/foo.dds");
+    tmp.touch("a.esp");
+    std::error_code ec;
+    std::filesystem::create_directory_symlink(tmp.sub("Textures"), tmp.sub("linkdir"), ec);
+    std::filesystem::create_directory_symlink(tmp.sub("nope"), tmp.sub("dangle"), ec);
+    std::filesystem::create_symlink(tmp.sub("a.esp"), tmp.sub("linkfile"), ec);
+    const auto all = mol::scan_layer(tmp.p.string(), {}, mol::default_mr());
+    auto kind = [&](const mol::vector<mol::ScanEntry>& v, std::string_view rel) -> int {
+        for (const auto& e : v) if (e.rel == rel) return e.is_dir ? 1 : 0;
+        return -1;
+    };
+    CHECK_EQ(kind(all, "linkdir"), 1);    // 指向目录的链接 → 目录（但不递归）
+    CHECK_EQ(kind(all, "dangle"), 0);     // 断链 → 文件
+    CHECK_EQ(kind(all, "linkfile"), 0);
+    CHECK_EQ(kind(all, "Textures"), 1);
+    CHECK_EQ(kind(all, "Textures/foo.dds"), 0);
+    CHECK_EQ(kind(all, "linkdir/foo.dds"), -1);
+
+    const auto top = mol::scan_layer_top(tmp.p.string(), "Data", mol::default_mr());
+    CHECK_EQ(top.size(), std::size_t{5});  // Textures、a.esp、三个链接；不含 Textures/foo.dds
+    CHECK_EQ(kind(top, "Data/Textures"), 1);
+    CHECK_EQ(kind(top, "Data/Textures/foo.dds"), -1);
+    CHECK_EQ(std::string(top[1].abs), tmp.sub("a.esp").string());
+    // 根以 '/' 结尾也不产生双斜杠
+    const auto slash = mol::scan_layer_top(tmp.p.string() + "/", {}, mol::default_mr());
+    CHECK_EQ(std::string(slash[1].abs), tmp.sub("a.esp").string());
 }
 
 TEST(scan_layer_no_prefix_and_missing_root) {

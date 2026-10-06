@@ -1,5 +1,7 @@
 #pragma once
 // 把 MergeResult 物化为"链接农场"目录，幂等、可 diff、可清理。
+#include <cstddef>
+#include <functional>
 #include <string_view>
 
 #include "mol/merge.hpp"
@@ -51,7 +53,10 @@ Plan plan_farm(const MergeResult& expected, std::string_view root, mr* mem = def
 
 // 执行 plan，并更新 manifest（manifest 记录我们创建的所有相对路径）。
 // 幂等：对同一 expected 连续 plan 两次，第二次必须 empty()。
-void apply_farm(const Plan& plan, std::string_view root);
+// progress（可空）：每完成一批 op 回调 (done, total)，最后一次 done == total。
+// manifest 在执行中按时间做检查点（约每秒一次）并在结束/失败时落盘，进程中途被杀最多丢最近一秒的登记。
+using ApplyProgress = std::function<void(std::size_t done, std::size_t total)>;
+void apply_farm(const Plan& plan, std::string_view root, const ApplyProgress& progress = {});
 
 // 清理：删除 manifest 中记录的全部内容，最后删 marker；root 为空则一并删除。
 void remove_farm(std::string_view root);

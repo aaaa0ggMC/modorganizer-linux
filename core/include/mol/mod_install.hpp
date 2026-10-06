@@ -9,6 +9,7 @@
 #include <string_view>
 
 #include <functional>
+#include <map>
 #include <optional>
 #include <span>
 #include <vector>
@@ -59,6 +60,11 @@ InstallResult install_archive(const Instance& inst, std::string_view archive, co
 InstallResult install_archive(const Instance& inst, std::string_view archive, std::string_view name = {},
                               bool force_root = false, std::string_view profile = {}, mr* mem = default_mr());
 
+// install_archive 用的 mod 目录名清理规则（去掉路径/Windows 非法字符、首尾的点与空格）。
+std::string sanitize_mod_name(std::string_view name);
+// mods/ 下或 modlist 里是否已有该名字（按 sanitize_mod_name 后、大小写不敏感比较）。
+bool mod_name_taken(const Instance& inst, std::string_view name, std::string_view profile = {});
+
 // 把任意压缩包解到 dest（须存在）；用外部 7z/7zz/bsdtar；不做安全校验（调用方自行 validate）。失败 → Error{io_error}。
 void extract_archive(std::string_view archive, std::string_view dest);
 
@@ -72,5 +78,10 @@ std::function<std::string(std::string_view)> fomod_file_state(const Instance& in
 // 只读：压缩包里有没有 FOMOD；有则把 fomod/ 下的文件（含 ModuleConfig.xml 引用的图片不在内）解到临时目录并解析。
 // 临时目录在 inst.downloads_dir 下，函数返回前清理。没有 FOMOD → nullopt。
 std::optional<fomod::Config> read_archive_fomod(const Instance& inst, std::string_view archive);
+// 把 FOMOD 引用的图片（配置里的路径，如 "images\\header.png"；相对模块根，大小写不敏感）解到 dest_dir（会创建），
+// 只解这些文件，不解整个压缩包。返回 配置里的路径 → 解出的绝对路径；找不到的图片不在结果里。
+// 需要 7z/7zz（bsdtar 没有大小写不敏感的过滤）；都没有时返回空。
+std::map<std::string, std::string> extract_fomod_images(const Instance& inst, std::string_view archive, const std::vector<std::string>& images,
+                                                        std::string_view dest_dir);
 
 }  // namespace mol

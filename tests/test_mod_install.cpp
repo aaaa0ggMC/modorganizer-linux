@@ -215,6 +215,38 @@ TEST(install_fomod_modes) {
     CHECK(fs::exists(t.dir / "inst/mods/RawMod/unselected_extra.txt"));
 }
 
+TEST(fomod_choices_that_install_nothing_give_an_empty_mod) {
+    if (!have_zip_tool()) return;
+    Tmp t;
+    Instance inst = make(t);
+    put(t.dir / "game/Data/Skyrim.esm");
+    inst.cfg.game_dir.assign((t.dir / "game").string());
+    // 只有一个可多选的补丁组：一个都不选是合法的，结果没有任何文件（真实的 JK's Outskirts 补丁包就是这样）
+    put(t.dir / "f/fomod/ModuleConfig.xml", R"(<config><moduleName>Patches</moduleName>
+<installSteps><installStep name="S"><optionalFileGroups><group name="Misc" type="SelectAny"><plugins order="Explicit">
+<plugin name="P"><files><file source="p.esp" destination="p.esp"/></files><typeDescriptor><type name="Optional"/></typeDescriptor></plugin>
+</plugins></group></optionalFileGroups></installStep></installSteps></config>)");
+    put(t.dir / "f/p.esp", "P");
+    CHECK(zip_dir(t.dir / "f", t.dir / "patches.zip"));
+    InstallOptions o;
+    o.name = "Empty";
+    o.fomod = FomodMode::Choices;
+    o.choices["S"]["Misc"] = {};
+    const auto r = install_archive(inst, (t.dir / "patches.zip").string(), o);
+    CHECK(r.fomod);
+    CHECK_EQ(r.files, std::size_t{0});
+    CHECK(fs::is_directory(t.dir / "inst/mods/Empty"));
+    CHECK(!fs::exists(t.dir / "inst/mods/Empty/p.esp"));
+    CHECK_EQ(list_mods(inst).size(), std::size_t{1});
+    // 不带 FOMOD 的空压缩包仍然是错误
+    fs::create_directories(t.dir / "e/sub");
+    put(t.dir / "e/sub/.keep", "");
+    fs::remove(t.dir / "e/sub/.keep");
+    CHECK(std::system(("cd '" + (t.dir / "e").string() + "' && zip -qr '" + (t.dir / "empty.zip").string() + "' . >/dev/null 2>&1").c_str()) == 0 || true);
+    if (fs::exists(t.dir / "empty.zip"))
+        CHECK_EQ(code_of([&] { install_archive(inst, (t.dir / "empty.zip").string(), "E2", false); }), std::string("invalid_argument"));
+}
+
 TEST(single_known_data_folder_is_not_stripped_as_a_wrapper) {
     if (!have_zip_tool()) return;
     Tmp t;
@@ -234,4 +266,27 @@ TEST(single_known_data_folder_is_not_stripped_as_a_wrapper) {
     CHECK(zip_dir(t.dir / "c", t.dir / "wrapped2.zip"));
     install_archive(inst, (t.dir / "wrapped2.zip").string(), "Wrapped2");
     CHECK(fs::exists(t.dir / "inst/mods/Wrapped2/SKSE/Plugins/y.dll"));
+}
+
+TEST(fomod_images_are_extracted_case_insensitively) {
+    if (!have_zip_tool() || std::system("command -v 7z >/dev/null 2>&1 || command -v 7zz >/dev/null 2>&1") != 0) return;
+    Tmp t;
+    const Instance inst = make(t);
+    // 外面包一层目录；图片的真实大小写与配置里的不同
+    put(t.dir / "f/Wrap/fomod/ModuleConfig.xml", "<config/>");
+    put(t.dir / "f/Wrap/Images/Header.PNG", "png-a");
+    put(t.dir / "f/Wrap/other/sub/Header.png", "png-b");
+    put(t.dir / "f/Wrap/textures/big.dds", "not an image we want");
+    CHECK(zip_dir(t.dir / "f", t.dir / "fomod.zip"));
+    const std::vector<std::string> imgs{"images\\header.png", "other/sub/header.png", "missing.png", "..\\evil.png"};
+    const auto got = extract_fomod_images(inst, (t.dir / "fomod.zip").string(), imgs, (t.dir / "imgs").string());
+    CHECK_EQ(got.size(), std::size_t{2});
+    auto body = [](const std::string& p) { std::ifstream in(p); std::string s; std::getline(in, s); return s; };
+    CHECK(got.count("images\\header.png") && body(got.at("images\\header.png")) == "png-a");
+    CHECK(got.count("other/sub/header.png") && body(got.at("other/sub/header.png")) == "png-b");
+    CHECK(!fs::exists(t.dir / "imgs/big.dds"));
+    // 只解了图片：临时目录已清理
+    std::size_t leftovers = 0;
+    for (const auto& e : fs::directory_iterator(t.dir / "inst/downloads")) leftovers += e.path().filename().string().starts_with(".mol-fomod") ? 1 : 0;
+    CHECK_EQ(leftovers, std::size_t{0});
 }

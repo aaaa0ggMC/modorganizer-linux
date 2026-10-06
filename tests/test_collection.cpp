@@ -259,6 +259,42 @@ TEST(md5_mismatch_deletes_the_bad_download_and_fails) {
     CHECK(!fs::exists(t.dir / "inst/mods/M"));
 }
 
+TEST(shared_nexus_files_are_reused_and_name_clashes_are_case_insensitive) {
+    if (!have_zip()) return;
+    Tmp t;
+    // 另一个集合（或 nexus install）已经装过 Nexus 文件 1/2，目录名大小写不同、清单里的名字还带结尾的点
+    put(t.dir / "inst/mods/Jk's Mod/meshes/a.nif", "A");
+    put(t.dir / "inst/mods/Jk's Mod/meta.ini", "[General]\nmodid=1\nfileid=2\n");
+    put(t.dir / "inst/profiles/Default/modlist.txt", "+Jk's Mod\n");
+    put(t.dir / "src/m/meshes/b.nif", "B");
+    zip_dir(t.dir / "src/m", t.dir / "other.zip");
+    const Collection coll = parse_collection(R"({"info":{"name":"X","domainName":"skyrimspecialedition"},"mods":[
+        {"name":"JK's Mod.","version":"1","optional":false,"source":{"type":"nexus","modId":1,"fileId":2,"tag":"same"}},
+        {"name":"jk's mod","version":"2","optional":false,"source":{"type":"manual","tag":"clash"}}],"modRules":[]})");
+    Mock srv([&](const Req&) -> Resp { return {404, "{}", ""}; });  // 不应该有任何下载
+    Instance inst;
+    inst.root.assign((t.dir / "inst").string());
+    inst.mods_dir.assign((t.dir / "inst/mods").string());
+    inst.profiles_dir.assign((t.dir / "inst/profiles").string());
+    inst.downloads_dir.assign((t.dir / "inst/downloads").string());
+    inst.overwrite_dir.assign((t.dir / "inst/overwrite").string());
+    inst.cfg.game.assign("skyrimse");
+    inst.cfg.profile.assign("Default");
+    put(t.dir / "game/Data/Skyrim.esm");
+    inst.cfg.game_dir.assign((t.dir / "game").string());
+    NexusClient client("K", "1", srv.base());
+    State st;
+    st.slug = "shared";
+    st.overrides["clash"].archive = (t.dir / "other.zip").string();
+    Report r = install_collection(inst, &client, coll, st, {}, {});
+    CHECK(r.complete());
+    CHECK_EQ(r.installed, std::size_t{2});
+    CHECK_EQ(st.mods["same"].mod_dir, std::string("Jk's Mod"));      // 复用，没有重复安装
+    CHECK(st.mods["clash"].mod_dir != "Jk's Mod");                     // 同名（大小写不同）但不是同一文件 → 加后缀
+    CHECK(fs::exists(t.dir / "inst/mods" / st.mods["clash"].mod_dir / "meshes/b.nif"));
+    CHECK(fs::exists(t.dir / "inst/mods/Jk's Mod/meshes/a.nif"));
+}
+
 TEST(downloads_run_in_parallel_and_installs_stay_ordered) {
     if (!have_zip()) return;
     Tmp t;

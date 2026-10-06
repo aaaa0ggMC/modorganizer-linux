@@ -4,6 +4,9 @@
 // 混用约束：所有 #include 在 import 之前（详见 cli/cmd_common.hpp 文件头）。
 #include <fstream>
 #include <iterator>
+#include <map>
+#include <string>
+#include <vector>
 
 #include "mol/fomod.hpp"
 #include "mol/instance.hpp"
@@ -20,6 +23,7 @@ Result run_fomod_inspect(Context& ctx) {
     if (!ctx.args.ok()) return make_usage_error(ctx.args.error, ctx);
     const mol::string archive = ctx.args.positionals.front();
     const mol::string choices_file = ctx.args.get("--choices", "", ctx.mem);
+    const mol::string images_dir = ctx.args.get("--images", "", ctx.mem);
     const mol::Instance inst = mol::load_instance(ctx.instance_dir, ctx.profile_override(), ctx.mem);
 
     mol::fomod::Choices choices;
@@ -39,6 +43,15 @@ Result run_fomod_inspect(Context& ctx) {
         if (auto v = game_info_string(ctx, inst, "version"); !v.empty()) env.game_version = v;
         if (auto v = game_info_string(ctx, inst, "scriptExtender", "version"); !v.empty()) env.script_extender_version = v;
         const auto r = mol::fomod::resolve(*cfg, choices, true, env);
+        std::map<std::string, std::string> image_paths;
+        if (!images_dir.empty()) {
+            std::vector<std::string> imgs;
+            for (const auto& s : r.steps)
+                for (const auto& g : s.groups)
+                    for (const auto& p : g.plugins)
+                        if (!p.image.empty()) imgs.emplace_back(p.image);
+            image_paths = mol::extract_fomod_images(inst, archive, imgs, images_dir);
+        }
         for (const auto& s : r.steps) {
             FomodStepRow sr{.name = std::pmr::string(s.name, ctx.mem), .visible = s.visible, .groups = std::pmr::vector<FomodGroupRow>(ctx.mem)};
             for (const auto& g : s.groups) {
@@ -46,7 +59,9 @@ Result run_fomod_inspect(Context& ctx) {
                                  .explicit_choice = g.explicit_choice, .plugins = std::pmr::vector<FomodPluginRow>(ctx.mem)};
                 for (const auto& p : g.plugins)
                     gr.plugins.push_back(FomodPluginRow{.name = std::pmr::string(p.name, ctx.mem), .description = std::pmr::string(p.description, ctx.mem),
-                                                        .image = std::pmr::string(p.image, ctx.mem), .type = std::pmr::string(mol::fomod::to_string(p.type), ctx.mem),
+                                                        .image = std::pmr::string(p.image, ctx.mem),
+                                                        .image_path = std::pmr::string(image_paths.count(std::string(p.image)) ? image_paths.at(std::string(p.image)) : std::string(), ctx.mem),
+                                                        .type = std::pmr::string(mol::fomod::to_string(p.type), ctx.mem),
                                                         .selected = p.selected});
                 sr.groups.push_back(std::move(gr));
             }

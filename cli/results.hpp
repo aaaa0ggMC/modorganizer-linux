@@ -29,6 +29,7 @@ struct Err {
 };
 
 // ---- version --------------------------------------------------------------
+inline constexpr const char* kToolVersion = "0.0.1";
 struct VersionData {
     std::pmr::string name;
     std::pmr::string version;
@@ -207,6 +208,7 @@ struct FomodPluginRow {
     std::pmr::string name;
     std::pmr::string description;
     std::pmr::string image;
+    std::pmr::string image_path;  // --images 时：解出的图片绝对路径（解不出为空）
     std::pmr::string type;  // Required|Optional|Recommended|NotUsable|CouldBeUsable（按当前选择求值）
     bool selected = false;
 };
@@ -297,9 +299,11 @@ struct CollectionOutcomeRow {
 struct CollectionPendingRow {
     std::pmr::string key;
     std::pmr::string name;
-    std::pmr::string kind;  // manual_download|fomod_choices|unsupported
+    std::pmr::string kind;  // manual_download|fomod_choices|unsupported|skse（旧状态文件里没有记录时为 pending）
     std::pmr::string detail;
     std::pmr::string url;
+    std::pmr::string archive;  // 已下载的压缩包（fomod_choices 时可直接 `fomod inspect`）；没有为空
+    std::pmr::string decision;  // 已用 `collection resolve` 记下、等下次 install 生效的决定：skip|fomod_defaults|fomod_choices|archive；没有为空
 };
 struct CollectionInstallData {
     std::pmr::string name;
@@ -400,6 +404,36 @@ struct NextData {
     std::pmr::string instance; // 解析出的实例目录
     std::pmr::vector<NextStep> steps;
 };
+// ---- overview -----------------------------------------------------------------
+// GUI 概览页一次取齐的数据（一个进程、doctor 与游戏层各只跑一次）。
+struct OverviewCollectionRow {
+    std::pmr::string slug;
+    std::pmr::string name;
+    std::int64_t revision = 0;
+    std::size_t installed = 0;
+    std::size_t pending = 0;
+    std::size_t failed = 0;
+    std::size_t skipped = 0;
+};
+struct OverviewData {
+    std::pmr::string version;        // mo-linux 版本
+    bool has_instance = false;       // false 时下面的实例字段为空，doctor 为空，next 只有 instance.init
+    std::pmr::string instance;       // 实例根目录（解析后的）
+    std::pmr::string profile;
+    std::pmr::string game_dir;
+    std::pmr::string game_version;   // 游戏层报告的版本；空 = 取不到（host 缺失）
+    std::pmr::string farm_path;
+    bool nexus_key = false;          // 已保存/有环境变量的 Nexus key（不验证，不联网）
+    std::size_t mods_total = 0;      // 不含分隔符
+    std::size_t mods_enabled = 0;
+    std::size_t mods_missing = 0;    // 启用但目录不存在
+    std::size_t plugins_total = 0;
+    std::size_t plugins_enabled = 0;
+    std::pmr::vector<OverviewCollectionRow> collections;
+    DoctorData doctor;
+    NextData next;
+};
+
 struct LogFileRow {
     std::pmr::string name;
     std::int64_t size = 0;

@@ -146,8 +146,13 @@ TEST(invalid_choices_are_rejected) {
     CHECK_EQ(code_of([&] { resolve(c, a, false, {}); }), std::string("invalid_argument"));
     Choices b;
     b["Main"]["Version"] = {"Lite"};
-    b["Main"]["Extras"] = {"Locked"};  // NotUsable
-    CHECK_EQ(code_of([&] { resolve(c, b, false, {}); }), std::string("invalid_argument"));
+    b["Main"]["Extras"] = {"Locked"};  // NotUsable：与 MO2 一致，不能勾选 → 忽略（Vortex 记录的选择里会出现）
+    {
+        const auto r = resolve(c, b, false, {});
+        for (const auto& g : r.steps[0].groups)
+            for (const auto& p : g.plugins)
+                if (p.name == "Locked") CHECK(!p.selected);
+    }
     Choices d;
     d["Main"]["Version"] = {"Nope"};
     d["Main"]["Extras"] = {};

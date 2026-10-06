@@ -21,7 +21,33 @@
 - `apply` 空树首次创建 marker 时 `changed:true`；失败发送 `done:false`。超过 256 个操作的分批 apply、manifest 完整性、幂等与 unlink 不删除游戏源文件均已检查。
 - 完整构建、ctest 14/14、CLI e2e 125/125 与 `tests/check_cli.py` 22/22 均通过。Unix socket 事件测试需要允许本地 bind；受限沙箱内会被拒绝，应在允许本地 socket 的环境运行，不能跳过后算通过。
 
-**对 alib6（`~/Projs/aaaa0ggmcLib`）的修改：工作区未提交，需作者自行提交**（5 个文件，见 §6.5）。
+**对 alib6 的修改**：已提交（见 §6.5 与 §0.0）。
+
+### 0.0 2026-10-06：高性能加载 + GUI 体验（分支 `claude/mod-organizer-launcher-perf-jjpdt3`，三个仓库同名分支）
+
+**依赖**：需要 aaaa0ggmcLib 同名分支的 `95601e8`（长选项不再按前缀匹配另一个长选项，否则 `collection resolve … --fomod-defaults` 报缺值）；§6.5 的 4 处修复作者已于 10-06 提交进 main（`00ed09e`、`636e2d9`）。
+
+**性能**（合成实例：400 个 mod、约 10 万文件、5.8 万目录，4 核，热缓存）：
+
+| 命令 | 之前 | 之后 | 做法 |
+|---|---|---|---|
+| `plugins list` | 848ms | 19ms | 只扫各层 `Data/` 顶层（`build_data_top_model`） |
+| `doctor` / `next` | 2267ms / 2229ms | ~650ms | `scan_layer`/农场扫描改 openat + getdents 的 d_type（普通文件/目录零 stat，子目录相对 dirfd 打开），各层在各自 arena 里并行扫 |
+| `status` / `conflicts` | 1445ms / 800ms | ~600ms / 270ms | 同上 |
+| `apply`（10 万链接） | 31s | 11s | 原来每 256 op 一批、每批完整读写一次 manifest（O(n²)）；现在一次执行 + 每秒检查点；剩余时间几乎全在 ext4 建 inode |
+| GUI 概览刷新 | 5 个进程、doctor 跑 2 遍 | `overview` 1 个进程 | 新命令 `overview`；游戏层 `info_json` 进程内缓存（`plugins list` 原来 dlopen 游戏层 3 次） |
+
+**真实 Nexus 实测**（mock 游戏目录 + Premium key；不需要游戏本体）：装了 bkcwyc、cziol6、62eesj、sklk3h、llafgc 五个集合（约 190 个 mod），发现并修复：
+- 多个集合共用同一 mod：按 meta.ini 的 modid/fileid 复用；目录名冲突按清理后、大小写不敏感判断（原来直接失败）
+- Nexus 名字是 HTML 转义的（`JK&#39;s …`）→ `html_unescape`
+- 集合里的 SKSE64（silverlock.org 外部来源）→ 已有 SKSE 算满足，否则 pending `kind=skse`
+- Vortex 记录的 FOMOD 选择含 NotUsable 插件（SelectAll 组里的「介绍」页，FSMP）→ 按 MO2 语义忽略
+- FOMOD 选择可以什么都不装（全是可选补丁）→ 装成空 mod
+- `nexus search` / `collection search` 不再要求实例；`fomod inspect --images`；进度事件带 `item`；`collection status` 的 pending 带 `kind/url/archive/decision`
+
+**GUI**（launcher-modorg）：概览/模组/插件/集合/获取/启动六页重做；集合页的 FOMOD 向导在无头宿主里用真实补丁包走通（选择 → 记下决定 → 继续安装 → 59/59）。截图检查按 Launcher 的 DESIGN.md。
+
+**仍未验证**：host（Qt 游戏层）在这一轮的环境里没有构建（缺 Qt/third_party），所以游戏版本、`skse install`、`run` 没有实测；`test_shim_files`/`test_shim_ini` 以 root 运行时失败（root 无视只读权限，测试假设不成立，非回归）。
 
 ### 0.1 2026-10-04 晚：从「能合并」到「能玩」（均已提交，ctest 21/21、e2e 125/125、check_cli 22/22）
 
@@ -166,7 +192,7 @@ mo-linux (CLI, GCC, C++26, alib6)            ← cli/
 - `registry.cpp` 整体替换为 `host/overrides/uibase/registry.cpp`（无头版，不弹对话框）。
 - 漏洞提醒：补丁与上游版本绑定；升级 uibase 必须重跑 `scripts/make_uibase_patch.py` 并复核。
 
-## 6.5 对 alib6 的改动（在 `~/Projs/aaaa0ggmcLib`，**工作区未提交**，需作者自行提交）
+## 6.5 对 alib6 的改动（作者已于 2026-10-06 提交进 main：`00ed09e`、`636e2d9`；之后的 `95601e8` 在同名工作分支上）
 
 按用户授权修复了 alib6 的 4 处缺陷。涉及文件：`include/alib6/core/cmd.cppm`、`modules/alib6/core/cmd.cpp`、`modules/alib6/data/json.cpp`、`tests/alib6/test_cmd.cpp`、`tests/alib6/test_adata.cpp`。回归：alib6 的 cmd/parser/router/adata 测试共 **35 个全部通过**（用 `scratchpad` 里的 CMake 工程 + gtest 跑，因为 alib6 自己用 xmake；改动前 cmd/parser/router 为 12 个全过）。
 

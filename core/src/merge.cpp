@@ -12,6 +12,11 @@
 
 #include <filesystem>
 
+#include <dirent.h>
+#include <fcntl.h>
+#include <sys/stat.h>
+#include <unistd.h>
+
 #include "mol/casefold.hpp"
 #include "mol/merge.hpp"
 
@@ -485,68 +490,87 @@ MergeResult Merger::finish() {
 }
 
 // ---------------------------------------------------------------- scan_layer
+//
+// 直接用 openat + getdents 的 d_type 遍历：常见文件系统（ext4/btrfs/xfs/tmpfs）上普通文件与目录
+// 不需要任何 stat；只有符号链接（要看目标类型）与 d_type 未知的条目才 fstatat。
+// 相对 dirfd 打开子目录，内核不必每次从根解析完整路径。
 
 void append_comp(std::string& rel, std::string_view name) {
     if (!rel.empty()) rel.push_back('/');
     rel.append(name);
 }
 
-void scan_dir(const std::filesystem::path& dir, std::string& rel, vector<ScanEntry>& out, mr* mem,
-              unsigned depth) {
-    if (depth >= kMaxDepth) return;
-    std::error_code ec;
-    std::filesystem::directory_iterator it(dir, ec);
-    if (ec) return;
+struct DirCloser {
+    DIR* d;
+    ~DirCloser() {
+        if (d) ::closedir(d);
+    }
+};
 
-    const std::size_t base = rel.size();
-    for (const std::filesystem::directory_entry& ent : it) {
-        std::error_code lst_ec;
-        const std::filesystem::file_status lst = ent.symlink_status(lst_ec);
-        if (lst_ec) continue;  // 读不了的条目跳过
-
-        const std::filesystem::path name_path = ent.path().filename();
-        const std::string_view name(name_path.native());
+// dfd 的所有权交给本函数（closedir 时关闭）。abs 为该目录的绝对路径（不以 '/' 结尾，根目录除外）。
+void scan_fd(int dfd, std::string& abs, std::string& rel, vector<ScanEntry>& out, mr* mem, unsigned depth,
+             unsigned max_depth) {
+    DIR* d = ::fdopendir(dfd);
+    if (!d) {
+        ::close(dfd);
+        return;
+    }
+    DirCloser guard{d};
+    const std::size_t abs_base = abs.size();
+    const std::size_t rel_base = rel.size();
+    while (const dirent* de = ::readdir(d)) {
+        const std::string_view name(de->d_name);
         if (name.empty() || name == "." || name == "..") continue;
 
-        bool is_dir = std::filesystem::is_directory(lst);
-        bool is_link = std::filesystem::is_symlink(lst);
-        if (is_link) {
+        bool is_dir = false, is_link = false;
+        unsigned char t = de->d_type;
+        if (t == DT_UNKNOWN) {
+            struct stat st {};
+            if (::fstatat(dfd, de->d_name, &st, AT_SYMLINK_NOFOLLOW) != 0) continue;  // 读不了的条目跳过
+            t = S_ISDIR(st.st_mode) ? DT_DIR : S_ISLNK(st.st_mode) ? DT_LNK : DT_REG;
+        }
+        if (t == DT_DIR) {
+            is_dir = true;
+        } else if (t == DT_LNK) {
             // 符号链接按指向目标的类型归类；目录链接不递归（防环）。
-            std::error_code tgt_ec;
-            const std::filesystem::file_status tgt = ent.status(tgt_ec);
-            is_dir = tgt_ec ? false : std::filesystem::is_directory(tgt);
+            is_link = true;
+            struct stat st {};
+            is_dir = ::fstatat(dfd, de->d_name, &st, 0) == 0 && S_ISDIR(st.st_mode);
         }
 
         append_comp(rel, name);
+        if (abs.empty() || abs.back() != '/') abs.push_back('/');
+        abs.append(name);
         ScanEntry entry(mem);
         entry.rel.assign(rel);
         entry.is_dir = is_dir;
-        entry.abs.assign(ent.path().native());
+        entry.abs.assign(abs);
         out.push_back(std::move(entry));
 
-        if (is_dir && !is_link) scan_dir(ent.path(), rel, out, mem, depth + 1);
-        rel.resize(base);
+        if (is_dir && !is_link && depth + 1 < max_depth) {
+            const int sub = ::openat(dfd, de->d_name, O_RDONLY | O_DIRECTORY | O_NOFOLLOW | O_CLOEXEC);
+            if (sub >= 0) scan_fd(sub, abs, rel, out, mem, depth + 1, max_depth);
+        }
+        rel.resize(rel_base);
+        abs.resize(abs_base);
     }
 }
 
-}  // namespace
-
-vector<ScanEntry> scan_layer(std::string_view root, std::string_view prefix, mr* mem) {
+vector<ScanEntry> scan_impl(std::string_view root, std::string_view prefix, mr* mem, unsigned max_depth) {
     const mol::allocator_type alloc(mem);
     vector<ScanEntry> out(alloc);
 
-    std::error_code ec;
-    const std::string root_str(root);
-    const std::filesystem::path root_path(root_str);
-    const std::filesystem::file_status rst = std::filesystem::status(root_path, ec);
-    if (ec || !std::filesystem::exists(rst) || !std::filesystem::is_directory(rst)) return out;
+    std::string abs(root);
+    while (abs.size() > 1 && abs.back() == '/') abs.pop_back();
+    const int fd = ::open(abs.c_str(), O_RDONLY | O_DIRECTORY | O_CLOEXEC);  // 根本身可以是符号链接
+    if (fd < 0) return out;
 
     std::string_view pfx = prefix;
     while (!pfx.empty() && pfx.front() == '/') pfx.remove_prefix(1);
     while (!pfx.empty() && pfx.back() == '/') pfx.remove_suffix(1);
 
     std::string rel(pfx);
-    scan_dir(root_path, rel, out, mem, 0);
+    scan_fd(fd, abs, rel, out, mem, 0, max_depth);
     std::sort(out.begin(), out.end(), [](const ScanEntry& a, const ScanEntry& b) {
         if (std::string_view(a.rel) != std::string_view(b.rel)) {
             return std::string_view(a.rel) < std::string_view(b.rel);
@@ -555,6 +579,16 @@ vector<ScanEntry> scan_layer(std::string_view root, std::string_view prefix, mr*
         return std::string_view(a.abs) < std::string_view(b.abs);
     });
     return out;
+}
+
+}  // namespace
+
+vector<ScanEntry> scan_layer(std::string_view root, std::string_view prefix, mr* mem) {
+    return scan_impl(root, prefix, mem, kMaxDepth);
+}
+
+vector<ScanEntry> scan_layer_top(std::string_view root, std::string_view prefix, mr* mem) {
+    return scan_impl(root, prefix, mem, 1);
 }
 
 MergeResult merge_listings(std::span<const vector<ScanEntry>> layers, mr* mem) {
