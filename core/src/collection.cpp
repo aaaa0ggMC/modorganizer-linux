@@ -110,12 +110,18 @@ fomod::Choices choices_from_vortex(std::string_view json) {
     if (S(doc, "type") != "fomod") return out;
     const auto* opts = sub(doc, "options");
     if (!opts || !opts->is_array()) return out;
+    // 同名步骤/组（常见：每一步都叫 "Installation"、组名是 " "）按出现次序区分，见 fomod::occurrence_key；
+    // 按名字直接合并会把不同步骤的选择混进同一组（"no plugin 'Finish Installation' in group ' '"、"needs exactly one choice"）
+    std::map<std::string, int> step_seen;
     for (const auto& step : opts->array()) {
-        const std::string sname = S(step, "name");
+        const std::string raw = S(step, "name");
+        const std::string sname = fomod::occurrence_key(raw, ++step_seen[fomod::norm_name(raw)]);
         const auto* groups = sub(step, "groups");
         if (!groups || !groups->is_array()) continue;
+        std::map<std::string, int> group_seen;
         for (const auto& g : groups->array()) {
-            auto& set = out[sname][S(g, "name")];
+            const std::string graw = S(g, "name");
+            auto& set = out[sname][fomod::occurrence_key(graw, ++group_seen[fomod::norm_name(graw)])];
             const auto* chs = sub(g, "choices");
             if (chs && chs->is_array())
                 for (const auto& c : chs->array()) set.insert(S(c, "name"));
@@ -657,7 +663,7 @@ Report install_collection(const Instance& inst, const NexusClient* client, const
             io.fomod_env.game_version = std::string(game_version.empty() ? "0.0.0.0" : game_version);
             bool need_choices = false;
             if (ov.has_choices) { io.fomod = FomodMode::Choices; io.choices = ov.choices; }
-            else if (m.has_choices) { io.fomod = FomodMode::Choices; io.choices = m.choices; }
+            else if (m.has_choices) { io.fomod = FomodMode::Choices; io.choices = m.choices; io.fomod_lenient = true; }
             else if (ov.fomod_defaults || opt.fomod_defaults) io.fomod = FomodMode::Defaults;
             else io.fomod = FomodMode::Unset;
             // 目录名冲突（大小写不敏感、按清理后的名字比较）：不是我们装的同名目录 → 加后缀
@@ -678,6 +684,12 @@ Report install_collection(const Instance& inst, const NexusClient* client, const
             ms.status = "installed";
             ms.mod_dir = std::string(res.name);
             ms.note.clear();
+            if (!res.fomod_notes.empty()) {  // 清单的选择与压缩包对不上的地方用了默认：装上，但要让人知道
+                ms.note = "FOMOD choices adapted to this archive: ";
+                for (std::size_t i = 0; i < res.fomod_notes.size(); ++i) ms.note += (i ? "; " : "") + res.fomod_notes[i];
+                out.note = ms.note;
+                rep.notes.push_back(m.name + ": " + ms.note);
+            }
             out.status = "installed";
             out.mod_dir = ms.mod_dir;
             ++rep.installed;
@@ -685,7 +697,9 @@ Report install_collection(const Instance& inst, const NexusClient* client, const
             (void)need_choices;
         } catch (const Error& e) {
             if (e.code == "fomod_choices_required")
-                pend("fomod_choices", "this FOMOD installer needs choices: run `fomod inspect` on the archive, then `collection resolve --mod KEY --fomod FILE` (or --fomod-defaults)");
+                pend("fomod_choices", "the collection records no FOMOD choices for this mod (the curator expects you to pick): run `fomod inspect` on the archive, then "
+                                     "`collection resolve --mod KEY --fomod FILE` (or --fomod-defaults); or accept the installer defaults for every such mod with "
+                                     "`collection install SLUG --fomod-defaults`");
             else if (m.has_choices && e.code == "invalid_argument" && std::string(e.what()).rfind("FOMOD:", 0) == 0)
                 pend("fomod_choices", std::string("the collection's FOMOD choices do not fit this archive: ") + e.what());
             else

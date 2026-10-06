@@ -135,7 +135,14 @@ Loaded load_remote(Context& ctx, const mol::Instance* inst, const Ref& ref, std:
         const fs::path p(ref.local);
         l.dir = dir_of(ref.slug);
         const std::string ext = std::string(mol::casefold(p.extension().string()));
-        l.coll = col::parse_collection(ext == ".json" ? read_file(p) : unpack_manifest(ref.local, fs::path(l.dir) / "archive-local"));
+        const std::string text = ext == ".json" ? read_file(p) : unpack_manifest(ref.local, fs::path(l.dir) / "archive-local");
+        l.coll = col::parse_collection(text);
+        if (ext == ".json" && inst) {  // 和压缩包一样留一份在实例里：collection status / next（目标游戏版本）离线可读
+            std::error_code ec;
+            const fs::path keep = fs::path(l.dir) / "archive-local";
+            fs::create_directories(keep, ec);
+            std::ofstream(keep / "collection.json", std::ios::binary | std::ios::trunc) << text;
+        }
         return l;
     }
     const mol::NexusClient client = make_client();
@@ -203,7 +210,7 @@ std::string status_of(const col::State& st, const std::string& key) {
 }
 
 std::string human_size(std::uint64_t n) {
-    const char* u[] = {"B", "KB", "MB", "GB", "TB"};
+    const char* u[] = {"B", "KiB", "MiB", "GiB", "TiB"};
     double v = static_cast<double>(n);
     int i = 0;
     while (v >= 1024 && i < 4) { v /= 1024; ++i; }
@@ -222,6 +229,17 @@ struct Preflight {
 Preflight preflight(const mol::Instance& inst, const Loaded& l, const col::State& st, const col::InstallOptions& opt, const std::string& gv) {
     Preflight p;
     std::error_code ec;
+    // downloads/ 里已有的压缩包：按大小粗配（真正安装时 install_collection 还会按 大小+md5 核对）。
+    // 同样大小的文件可以配给多个清单条目，各用一次。
+    std::map<std::uint64_t, int> on_disk;
+    for (fs::directory_iterator it(fs::path(std::string(inst.downloads_dir)), ec), end; !ec && it != end; it.increment(ec)) {
+        std::error_code e2;
+        if (!it->is_regular_file(e2)) continue;
+        const std::string ext = std::string(mol::casefold(it->path().extension().string()));
+        if (ext == ".meta" || ext == ".part" || ext == ".tmp") continue;
+        ++on_disk[static_cast<std::uint64_t>(it->file_size(e2))];
+    }
+    ec.clear();
     for (const auto& m : l.coll.mods) {
         const std::string key = m.key();
         const auto ov = st.overrides.find(key);
@@ -233,7 +251,12 @@ Preflight preflight(const mol::Instance& inst, const Loaded& l, const col::State
         const bool have = sit != st.mods.end() && ((sit->second.status == "installed" && !sit->second.mod_dir.empty() &&
                                                     fs::is_directory(fs::path(std::string(inst.mods_dir)) / sit->second.mod_dir, ec)) ||
                                                    (!sit->second.archive.empty() && fs::is_regular_file(sit->second.archive, ec)));
-        if (!have) p.remaining += z;
+        if (have) continue;
+        if (auto it = on_disk.find(z); z > 0 && it != on_disk.end() && it->second > 0) {
+            --it->second;
+            continue;
+        }
+        p.remaining += z;
     }
     fs::path probe(std::string(inst.downloads_dir));
     while (!probe.empty() && !fs::exists(probe, ec)) probe = probe.parent_path();
@@ -288,6 +311,7 @@ Result run_collection_inspect(Context& ctx) {
         const std::int64_t z = std::max<std::int64_t>(m.source.file_size, 0);
         d.total_size += z;
         if (m.optional) d.optional_size += z;
+        if (m.has_choices) ++d.fomod_choices;
         const std::string type = m.source.type.empty() ? std::string("unknown") : m.source.type;
         auto it = std::find_if(d.sources.begin(), d.sources.end(), [&](const CollectionSourceRow& s) { return std::string_view(s.type) == type; });
         if (it == d.sources.end()) {

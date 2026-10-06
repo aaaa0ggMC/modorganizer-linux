@@ -362,14 +362,42 @@ Config parse_config(const XmlNode& root) {
     return cfg;
 }
 
-Resolved resolve(const Config& cfg, const Choices& choices, bool use_defaults, const Env& env) {
+std::string norm_name(std::string_view s) {
+    std::string u = std::string(html_unescape(s));
+    const auto b = u.find_first_not_of(" \t\r\n");
+    if (b == std::string::npos) return {};
+    u = u.substr(b, u.find_last_not_of(" \t\r\n") - b + 1);
+    return lower(u);
+}
+
+namespace {
+// 在 map 里按键找：先精确，再按 norm_name
+template <class M>
+auto find_named(const M& m, const std::string& key) {
+    auto it = m.find(key);
+    if (it != m.end()) return it;
+    const std::string n = norm_name(key);
+    for (auto i = m.begin(); i != m.end(); ++i)
+        if (norm_name(i->first) == n) return i;
+    return m.end();
+}
+}  // namespace
+
+std::string occurrence_key(std::string_view name, int k) {
+    return k <= 1 ? std::string(name) : std::string(name) + " [#" + std::to_string(k) + "]";
+}
+
+Resolved resolve(const Config& cfg, const Choices& choices, bool use_defaults, const Env& env, std::vector<std::string>* lenient_notes) {
     Resolved out;
     FlagMap flags;
     std::vector<FileEntry> files = cfg.required;
+    const bool lenient = lenient_notes != nullptr;
+    std::map<std::string, int> step_seen;  // 可见步骤名（norm）→ 已出现次数
 
     for (const auto& step : cfg.steps) {
         StepState ss;
         ss.name = step.name;
+        ss.key = step.name;
         ss.visible = !step.has_visible || test(step.visible, flags, env);
         if (!ss.visible) {
             out.steps.push_back(std::move(ss));
@@ -377,7 +405,10 @@ Resolved resolve(const Config& cfg, const Choices& choices, bool use_defaults, c
         }
         FlagMap pending;  // 本步骤选中插件设置的标志，步骤结束后才生效
         std::vector<std::pair<std::string, std::string>> pending_flags;
-        const auto sit = choices.find(step.name);
+        const int step_k = ++step_seen[norm_name(step.name)];
+        ss.key = occurrence_key(step.name, step_k);
+        const auto sit = find_named(choices, occurrence_key(step.name, step_k));
+        std::map<std::string, int> group_seen;
         for (const auto& g : step.groups) {
             GroupState gs;
             gs.name = g.name;
@@ -387,17 +418,34 @@ Resolved resolve(const Config& cfg, const Choices& choices, bool use_defaults, c
 
             std::set<std::size_t> sel;
             const std::set<std::string>* picked = nullptr;
+            const int group_k = ++group_seen[norm_name(g.name)];
+            gs.key = occurrence_key(g.name, group_k);
             if (sit != choices.end()) {
-                auto git = sit->second.find(g.name);
+                auto git = find_named(sit->second, occurrence_key(g.name, group_k));
                 if (git != sit->second.end()) picked = &git->second;
             }
+            // 宽松模式：一处不合就记一句、整组退回默认
+            bool fallback = false;
+            const auto give_up = [&](const std::string& why) {
+                if (!lenient) bad(why);
+                lenient_notes->push_back(why + "; used the installer's default for this group");
+                fallback = true;
+            };
             if (picked) {
                 gs.explicit_choice = true;
                 for (const auto& nm : *picked) {
                     std::size_t idx = g.plugins.size();
                     for (std::size_t i = 0; i < g.plugins.size(); ++i)
                         if (g.plugins[i].name == nm) { idx = i; break; }
-                    if (idx == g.plugins.size()) bad("no plugin '" + nm + "' in group '" + g.name + "' of step '" + step.name + "'");
+                    if (idx == g.plugins.size())
+                        for (std::size_t i = 0; i < g.plugins.size(); ++i)
+                            if (norm_name(g.plugins[i].name) == norm_name(nm)) { idx = i; break; }
+                    if (idx == g.plugins.size()) {
+                        const std::string why = "no plugin '" + nm + "' in group '" + g.name + "' of step '" + step.name + "'";
+                        if (!lenient) bad(why);
+                        lenient_notes->push_back(why + " (ignored)");
+                        continue;
+                    }
                     // NotUsable 插件在 MO2 里是灰掉且不勾选的（SelectAll 组也一样）；Vortex 记录的选择里可能带着它
                     // （例如只有说明文字、没有文件的「介绍」页）。按 MO2 语义忽略它，组的数量约束照常检查。
                     if (!usable(types[idx])) continue;
@@ -406,16 +454,22 @@ Resolved resolve(const Config& cfg, const Choices& choices, bool use_defaults, c
                 for (std::size_t i = 0; i < g.plugins.size(); ++i)
                     if (types[i] == PluginType::Required) sel.insert(i);
                 const auto n = sel.size();
-                if (g.type == GroupType::ExactlyOne && n != 1) bad("group '" + g.name + "' needs exactly one choice");
-                if (g.type == GroupType::AtMostOne && n > 1) bad("group '" + g.name + "' allows at most one choice");
-                if (g.type == GroupType::AtLeastOne && n < 1) bad("group '" + g.name + "' needs at least one choice");
-                if (g.type == GroupType::All) {
+                if (g.type == GroupType::ExactlyOne && n != 1) give_up("group '" + g.name + "' needs exactly one choice");
+                else if (g.type == GroupType::AtMostOne && n > 1) give_up("group '" + g.name + "' allows at most one choice");
+                else if (g.type == GroupType::AtLeastOne && n < 1) give_up("group '" + g.name + "' needs at least one choice");
+                else if (g.type == GroupType::All) {
                     std::size_t need = 0;
                     for (std::size_t i = 0; i < g.plugins.size(); ++i) if (usable(types[i])) ++need;
-                    if (n != need) bad("group '" + g.name + "' requires all of its plugins");
+                    if (n != need) give_up("group '" + g.name + "' requires all of its plugins");
+                }
+                if (fallback) {
+                    gs.explicit_choice = false;
+                    sel = default_selection(g, types);
                 }
             } else {
-                if (!use_defaults) bad("no choice given for group '" + g.name + "' of step '" + step.name + "'");
+                if (!use_defaults && !lenient) bad("no choice given for group '" + g.name + "' of step '" + step.name + "'");
+                if (!use_defaults && lenient)
+                    lenient_notes->push_back("no recorded choice for group '" + g.name + "' of step '" + step.name + "'; used the installer's default");
                 sel = default_selection(g, types);
             }
             for (std::size_t i = 0; i < g.plugins.size(); ++i) {

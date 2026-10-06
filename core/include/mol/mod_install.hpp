@@ -33,6 +33,7 @@ struct InstallOptions {
     FomodMode fomod = FomodMode::Unset;
     fomod::Choices choices;
     bool use_defaults_for_missing = false;
+    bool fomod_lenient = false;  // Choices 来自集合清单：对不上的组退回默认、不存在的插件忽略，记进 InstallResult::fomod_notes
     fomod::Env fomod_env;  // file_state 为空时安装会自己补上（查游戏 Data 与已启用 mod）
 };
 
@@ -44,9 +45,13 @@ struct InstallResult {
     std::size_t files = 0;
     bool fomod = false;                  // 经过了 FOMOD 安装
     std::vector<std::string> missing;    // FOMOD 引用了、但压缩包里找不到的源
+    std::vector<std::string> fomod_notes;  // fomod_lenient 时的退让说明
     explicit InstallResult(allocator_type a = {}) : name(a), path(a) {}
-    InstallResult(const InstallResult& o, allocator_type a) : name(o.name, a), path(o.path, a), root(o.root), files(o.files), fomod(o.fomod), missing(o.missing) {}
-    InstallResult(InstallResult&& o, allocator_type a) : name(std::move(o.name), a), path(std::move(o.path), a), root(o.root), files(o.files), fomod(o.fomod), missing(std::move(o.missing)) {}
+    InstallResult(const InstallResult& o, allocator_type a)
+        : name(o.name, a), path(o.path, a), root(o.root), files(o.files), fomod(o.fomod), missing(o.missing), fomod_notes(o.fomod_notes) {}
+    InstallResult(InstallResult&& o, allocator_type a)
+        : name(std::move(o.name), a), path(std::move(o.path), a), root(o.root), files(o.files), fomod(o.fomod), missing(std::move(o.missing)),
+          fomod_notes(std::move(o.fomod_notes)) {}
     InstallResult(const InstallResult&) = default;
     InstallResult(InstallResult&&) = default;
     InstallResult& operator=(const InstallResult&) = default;

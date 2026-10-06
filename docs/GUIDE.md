@@ -75,7 +75,7 @@ mo-linux collection status SLUG        # 已装 / 待处理 / 失败
 
 | pending 类型 | 处理 |
 |---|---|
-| `fomod_choices` | `fomod inspect` 看选项 → `collection resolve SLUG --mod KEY --fomod 选择.json` 或 `--fomod-defaults` |
+| `fomod_choices` | 集合没记录这个 FOMOD 的选择：`fomod inspect` 看选项 → `collection resolve SLUG --mod KEY --fomod 选择.json` 或 `--fomod-defaults`；想全部用默认就 `collection install SLUG --fomod-defaults`。（集合**记录了**选择但与新版压缩包对不上的，会自动按组退回默认并装上，看该 mod 的 note） |
 | `manual_download` / `nexus_free` | 按给出的 `url` 下载到 `<实例>/downloads/`（文件名随意，按大小 + 哈希匹配），或 `collection resolve … --archive 文件` / `--nxm 链接` |
 | `skse` | `mo-linux skse install` |
 | 不想要的 | `collection resolve SLUG --mod KEY --skip` |

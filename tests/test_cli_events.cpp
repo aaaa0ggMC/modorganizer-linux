@@ -153,18 +153,35 @@ TEST(progress_carries_rate_and_eta_after_a_second) {
     sink.set_clock(&advancing_clock);  // 每次调用 +100ms
     sink.start("download");
     // 每次 progress 消耗两次时钟（采样 + 节流）= 200ms，每次 +2000 → 10000/s
-    for (unsigned long long d = 2000; d <= 40000; d += 2000) sink.progress("download", d, 100000);
+    for (unsigned long long d = 2000; d <= 40000; d += 2000) {
+        sink.progress("download", d, 100000);
+        sink.progress("downloaded", d / 2000, 20, "Mod " + std::to_string(d));  // 计数型：不带 rate/eta
+    }
     ::close(fds[1]);
     const std::string out = drain(fds[0]);
     ::close(fds[0]);
     const auto first = out.find("\"rate\":");
     CHECK(first != std::string::npos);
     CHECK(out.find("{\"event\":\"progress\",\"op\":\"download\",\"done\":2000,\"total\":100000}") != std::string::npos);  // 起步还没有速率
-    const auto last = out.rfind("\n", out.size() - 2);
-    const std::string tail = out.substr(last + 1);
+    const auto last_dl = out.rfind("\"op\":\"download\",");
+    const auto line_start = out.rfind('\n', last_dl) + 1;
+    const std::string tail = out.substr(line_start, out.find('\n', last_dl) - line_start);
     CHECK(tail.find("\"done\":40000") != std::string::npos);
     CHECK(tail.find("\"rate\":") != std::string::npos);
     CHECK(tail.find("\"eta\":") != std::string::npos);
+    // 一旦有了速率，之后每条 download 都带（两次采样之间沿用）；downloaded 一条都不带
+    std::size_t pos = first, lines_after = 0, with_rate = 0;
+    while ((pos = out.find('\n', pos)) != std::string::npos && pos + 1 < out.size()) {
+        const std::string line = out.substr(pos + 1, out.find('\n', pos + 1) - pos - 1);
+        ++pos;
+        if (line.find("\"op\":\"downloaded\"") != std::string::npos) CHECK(line.find("rate") == std::string::npos);
+        if (line.find("\"op\":\"download\"") != std::string::npos && line.find("\"event\":\"progress\"") != std::string::npos) {
+            ++lines_after;
+            if (line.find("\"rate\":") != std::string::npos) ++with_rate;
+        }
+    }
+    CHECK(lines_after > 0);
+    CHECK_EQ(with_rate, lines_after);
 }
 
 TEST(epipe_is_silent_and_disables_the_sink) {

@@ -91,7 +91,12 @@ struct Env {
 };
 
 // 选择：步骤名 → 组名 → 被选插件名。
+// 同名的步骤（不少 FOMOD 每一步都叫 "Installation"）、同一步里同名的组：第 k 次出现（k ≥ 2）的键是 "名字 [#k]"
+// （occurrence_key）。步骤按「可见步骤里第几次出现」数，组按「该步骤里第几次出现」数。
 using Choices = std::map<std::string, std::map<std::string, std::set<std::string>>>;
+std::string occurrence_key(std::string_view name, int k);
+// 名字的宽松比较键：去首尾空白、HTML 实体、大小写（出现次数也按它数）
+std::string norm_name(std::string_view s);
 
 struct PluginState {
     std::string name, description, image;
@@ -100,12 +105,14 @@ struct PluginState {
 };
 struct GroupState {
     std::string name;
+    std::string key;  // choices 里用的键（同名组的第 k 个是 "名字 [#k]"）
     GroupType type = GroupType::Any;
     bool explicit_choice = false;  // 来自调用方的 choices（否则是默认值）
     std::vector<PluginState> plugins;
 };
 struct StepState {
     std::string name;
+    std::string key;  // choices 里用的键（可见的同名步骤的第 k 个是 "名字 [#k]"）
     bool visible = true;
     std::vector<GroupState> groups;
 };
@@ -117,7 +124,12 @@ struct Resolved {
 // use_defaults=false 时，可见的组若在 choices 里没有条目 → Error{invalid_argument}。
 // 显式选择违反组约束（ExactlyOne 选了 0/2 个等）、选了 NotUsable、或指名不存在 → Error{invalid_argument}；
 // Required 插件总是被选中（不要求出现在 choices 里）。
-Resolved resolve(const Config& cfg, const Choices& choices, bool use_defaults, const Env& env);
+// lenient_notes 非空 = 宽松模式（集合清单里 Vortex 记录的选择，压缩包版本可能已变）：
+//   指名不存在的插件 → 忽略；显式选择违反组约束 → 该组改用默认选择；可见组没有条目 → 用默认选择；
+//   每次退让都往 lenient_notes 里记一句，不报错。
+// 名字匹配：先精确，再忽略大小写/首尾空白/HTML 实体。
+Resolved resolve(const Config& cfg, const Choices& choices, bool use_defaults, const Env& env,
+                 std::vector<std::string>* lenient_notes = nullptr);
 
 // 把 resolved.files 从 source_root 装配到 dest_root（dest_root 须存在）。缺失的源收集到 missing（不是错误）。
 // 返回复制的文件数。越界路径（..）→ Error{invalid_argument}。

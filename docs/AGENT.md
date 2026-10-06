@@ -42,10 +42,12 @@ mo-linux never asks questions mid-run. Anything that needs a decision is recorde
 
 | `kind` | Meaning | You do |
 |---|---|---|
-| `fomod_choices` | The archive has a FOMOD installer and no choices were supplied | `mo-linux -j fomod inspect ARCHIVE` → pick (or accept defaults) → `collection resolve … --fomod FILE` / `--fomod-defaults`, or re-run `nexus install … --fomod FILE` |
+| `fomod_choices` | The archive has a FOMOD installer and the collection recorded no choices for it (recorded choices that no longer fit the archive do *not* end up here: they are applied leniently, falling back to the installer default per group, and the mod's `note` says what changed — tell the user about those notes) | `mo-linux -j fomod inspect ARCHIVE` → pick (or accept defaults) → `collection resolve … --fomod FILE` / `--fomod-defaults`, or re-run `nexus install … --fomod FILE` |
 | `manual_download` | Free Nexus account, browser-only or manual source | Give the user `url`; they click download and send you an `nxm://` link → `collection resolve … --nxm LINK` (or `--archive FILE`) |
 | `unsupported` | Binary patches or bundled sources | `collection resolve … --skip`, or supply an archive with `--archive` |
 | `skse` | The collection lists SKSE64 from skse.silverlock.org | `mo-linux -j skse install`, then re-run `collection install` |
+
+**Game version first**: if `next` starts with `game.downgrade`, the collection targets another game version. Read the README with the user and get their OK for the downgrade method (usually a downgrade patcher run with `run --exe …`, copy-on-write). Do not `skse install` before that: SKSE has to match the new version.
 
 **Size and feasibility first**: `collection inspect SLUG` works without an instance. Its `total_size` is the real download (sum of the manifest's file sizes); the size shown by `collection search` / the Nexus page (`declared_total_size`) is often lower. Plan for about twice `total_size` of free disk (archives + extracted mods). `collection install` prints a preflight (stderr, `note` events, `data.preflight`) with warnings `disk_space` / `game_version` / `doctor` — stop and tell the user if any appear before a large download.
 

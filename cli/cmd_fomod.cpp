@@ -53,9 +53,9 @@ Result run_fomod_inspect(Context& ctx) {
             image_paths = mol::extract_fomod_images(inst, archive, imgs, images_dir);
         }
         for (const auto& s : r.steps) {
-            FomodStepRow sr{.name = std::pmr::string(s.name, ctx.mem), .visible = s.visible, .groups = std::pmr::vector<FomodGroupRow>(ctx.mem)};
+            FomodStepRow sr{.name = std::pmr::string(s.name, ctx.mem), .key = std::pmr::string(s.key, ctx.mem), .visible = s.visible, .groups = std::pmr::vector<FomodGroupRow>(ctx.mem)};
             for (const auto& g : s.groups) {
-                FomodGroupRow gr{.name = std::pmr::string(g.name, ctx.mem), .type = std::pmr::string(mol::fomod::to_string(g.type), ctx.mem),
+                FomodGroupRow gr{.name = std::pmr::string(g.name, ctx.mem), .key = std::pmr::string(g.key, ctx.mem), .type = std::pmr::string(mol::fomod::to_string(g.type), ctx.mem),
                                  .explicit_choice = g.explicit_choice, .plugins = std::pmr::vector<FomodPluginRow>(ctx.mem)};
                 for (const auto& p : g.plugins)
                     gr.plugins.push_back(FomodPluginRow{.name = std::pmr::string(p.name, ctx.mem), .description = std::pmr::string(p.description, ctx.mem),
