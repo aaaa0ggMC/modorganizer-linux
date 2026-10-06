@@ -1,5 +1,6 @@
 #include <unistd.h>
 
+#include <algorithm>
 #include <cstring>
 #include <filesystem>
 #include <fstream>
@@ -148,6 +149,32 @@ TEST(load_discovers_orders_and_enforces_regions) {
     const auto l2 = load_plugins(inst, forced);
     CHECK(names(l2) == names(l));
     for (std::size_t i = 0; i < l.rows.size(); ++i) CHECK_EQ(l2.rows[i].enabled, l.rows[i].enabled);
+}
+
+TEST(load_only_sees_data_top_level_case_insensitively) {
+    Tmp t;
+    const Instance inst = make(t);
+    // 游戏的 Data 目录是小写；根目录型 mod 的 Data 也是别的大小写
+    make_plugin(t.dir / "game/data/Skyrim.esm", 0x1, {});
+    put(t.dir / "game/SkyrimSE.exe", "x");
+    make_plugin(t.dir / "inst/mods/Root/DATA/RootPlugin.esp", 0, {"Skyrim.esm"});
+    put(t.dir / "inst/mods/Root/meta.ini", "[General]\nmol_root=true\n");
+    put(t.dir / "inst/mods/Root/skse64_loader.exe", "x");
+    make_plugin(t.dir / "inst/mods/M/Normal.esp", 0, {"Skyrim.esm"});
+    make_plugin(t.dir / "inst/mods/M/textures/NotAPlugin.esp", 0, {});  // 子目录里的不算
+    put(t.dir / "inst/profiles/Default/modlist.txt", "+M\n+Root\n");
+    const std::vector<string> forced{string("Skyrim.esm")};
+    const auto l = load_plugins(inst, forced);
+    CHECK_EQ(l.rows.size(), std::size_t{3});
+    CHECK_EQ(nm(l, 0), std::string("Skyrim.esm"));
+    std::vector<std::string> rest{nm(l, 1), nm(l, 2)};
+    std::sort(rest.begin(), rest.end());
+    CHECK_EQ(rest[0], std::string("Normal.esp"));
+    CHECK_EQ(rest[1], std::string("RootPlugin.esp"));
+    for (const auto& r : l.rows) {
+        if (r.name == "RootPlugin.esp") CHECK_EQ(std::string(r.source), std::string("Root"));
+        if (r.name == "Skyrim.esm") CHECK_EQ(std::string(r.source), std::string("<game>"));
+    }
 }
 
 TEST(missing_master_is_reported) {

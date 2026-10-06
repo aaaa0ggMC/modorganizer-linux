@@ -3,6 +3,8 @@
 //
 // 包含 cli/cmd_common.hpp（内有 `import alib6;`）→ 本头文件必须是 TU 中最后的 #include
 // （混用约束详见 cli/cmd_common.hpp 文件头）。
+#include "mol/doctor.hpp"
+
 #include "cmd_common.hpp"
 
 namespace cli {
@@ -25,6 +27,10 @@ Result run_wabbajack_inspect(Context&);
 Result run_wabbajack_install(Context&);
 Result run_schema(Context&);
 Result run_next(Context&);
+Result run_overview(Context&);
+// 供 overview 复用（cmd_doctor.cpp / cmd_agent.cpp）
+DoctorData doctor_data(Context& ctx, const mol::vector<mol::Check>& checks);
+NextData next_data(Context& ctx, const mol::Instance* inst, const mol::vector<mol::Check>* checks);
 Result run_logs(Context&);
 Result run_collection_inspect(Context&);
 Result run_collection_install(Context&);

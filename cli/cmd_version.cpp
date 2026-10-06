@@ -14,7 +14,7 @@ Result run_version(Context& ctx) {
     r.command = ctx.command;
     r.set_data(VersionData{
         .name = mol::string("mo-linux", ctx.mem),
-        .version = mol::string("0.0.1", ctx.mem),
+        .version = mol::string(kToolVersion, ctx.mem),
     });
     return r;
 }

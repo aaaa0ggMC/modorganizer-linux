@@ -144,6 +144,26 @@ assert data['data']['ready'] is False and data['data']['steps'][0]['id'] == 'ins
 data, _ = call('-j', '-i', str(instance), 'next')
 assert 'ready' in data['data'] and isinstance(data['data']['steps'], list)
 checks += 1
+# overview：一次取齐；与单独的 next/doctor 一致（上面的 with 块结束时临时目录已删除，这里自建实例）
+with tempfile.TemporaryDirectory(prefix='mol-cli-ov-', dir='/tmp') as tmp_ov:
+    ovr = Path(tmp_ov)
+    (ovr / 'game').mkdir()
+    ovi = ovr / 'instance'
+    call('-j', '-i', str(ovi), 'instance', 'init', '--game-dir', str(ovr / 'game'), '--prefix', str(ovr / 'prefix'))
+    (ovi / 'mods/A').mkdir(parents=True)
+    (ovi / 'profiles/Default/modlist.txt').write_text('+A\n-B\n')
+    data, _ = call('-j', '-i', str(ovr / 'nowhere'), 'overview')
+    assert data['data']['has_instance'] is False and data['data']['next']['steps'][0]['id'] == 'instance.init'
+    data, _ = call('-j', '-i', str(ovi), 'overview')
+    ov = data['data']
+    nx, _ = call('-j', '-i', str(ovi), 'next')
+    assert ov['has_instance'] is True and ov['instance'] == str(ovi)
+    assert [s['id'] for s in ov['next']['steps']] == [s['id'] for s in nx['data']['steps']]
+    dr, _ = call('-j', '-i', str(ovi), 'doctor', code=3)  # 假游戏目录里没有 exe → 有 error
+    assert ov['doctor']['errors'] == dr['data']['errors'] and len(ov['doctor']['checks']) == len(dr['data']['checks'])
+    assert (ov['mods_total'], ov['mods_enabled'], ov['mods_missing']) == (2, 1, 0), ov
+    assert ov['collections'] == [] and ov['version']
+checks += 1
 
 # ---- 默认实例 / nxm 处理器 ----
 import threading, http.server, socketserver

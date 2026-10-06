@@ -508,6 +508,36 @@ TEST(scan_layer_basic) {
     }
 }
 
+TEST(scan_layer_types_and_top_only) {
+    TempDir tmp;
+    tmp.touch("Textures/foo.dds");
+    tmp.touch("a.esp");
+    std::error_code ec;
+    std::filesystem::create_directory_symlink(tmp.sub("Textures"), tmp.sub("linkdir"), ec);
+    std::filesystem::create_directory_symlink(tmp.sub("nope"), tmp.sub("dangle"), ec);
+    std::filesystem::create_symlink(tmp.sub("a.esp"), tmp.sub("linkfile"), ec);
+    const auto all = mol::scan_layer(tmp.p.string(), {}, mol::default_mr());
+    auto kind = [&](const mol::vector<mol::ScanEntry>& v, std::string_view rel) -> int {
+        for (const auto& e : v) if (e.rel == rel) return e.is_dir ? 1 : 0;
+        return -1;
+    };
+    CHECK_EQ(kind(all, "linkdir"), 1);    // 指向目录的链接 → 目录（但不递归）
+    CHECK_EQ(kind(all, "dangle"), 0);     // 断链 → 文件
+    CHECK_EQ(kind(all, "linkfile"), 0);
+    CHECK_EQ(kind(all, "Textures"), 1);
+    CHECK_EQ(kind(all, "Textures/foo.dds"), 0);
+    CHECK_EQ(kind(all, "linkdir/foo.dds"), -1);
+
+    const auto top = mol::scan_layer_top(tmp.p.string(), "Data", mol::default_mr());
+    CHECK_EQ(top.size(), std::size_t{5});  // Textures、a.esp、三个链接；不含 Textures/foo.dds
+    CHECK_EQ(kind(top, "Data/Textures"), 1);
+    CHECK_EQ(kind(top, "Data/Textures/foo.dds"), -1);
+    CHECK_EQ(std::string(top[1].abs), tmp.sub("a.esp").string());
+    // 根以 '/' 结尾也不产生双斜杠
+    const auto slash = mol::scan_layer_top(tmp.p.string() + "/", {}, mol::default_mr());
+    CHECK_EQ(std::string(slash[1].abs), tmp.sub("a.esp").string());
+}
+
 TEST(scan_layer_no_prefix_and_missing_root) {
     TempDir tmp;
     tmp.touch("a/b.dds");

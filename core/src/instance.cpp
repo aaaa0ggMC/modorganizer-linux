@@ -7,12 +7,16 @@
 #include <cstdlib>
 #include <filesystem>
 #include <fstream>
+#include <memory>
+#include <optional>
+#include <thread>
 #include <sstream>
 #include <system_error>
 
 
 #include "mol/casefold.hpp"
 #include "mol/mo2fmt.hpp"
+#include "mol/parallel.hpp"
 
 import alib6;
 
@@ -399,23 +403,59 @@ bool move_mod(const Instance& inst, std::string_view name, std::size_t to_priori
     return true;
 }
 
-FarmModel build_farm_model(const Instance& inst, std::string_view profile, mr* mem) {
-    if (inst.cfg.game_dir.empty() || !is_dir(P(inst.cfg.game_dir)))
-        throw Error("config_invalid", "game_dir is not set or does not exist", S(inst.cfg.game_dir));
+namespace {
 
+struct LayerSpec {
+    std::string name;
+    std::string root;
+    std::string prefix;
+    bool is_mod = false;
+};
+
+// 扫描各层并合并。各层互不相关，可以并行扫：每层在自己的 arena 里扫（ctx.mem 不是线程安全的），
+// 合并结果再落到调用方的 mem。top_only：只列每层根的直接子项（插件列表只关心 Data/ 顶层）。
+FarmModel merge_layers(std::vector<LayerSpec>& specs, std::vector<Warning>& pre, bool top_only, mr* mem) {
     FarmModel model(mem);
-    vector<vector<ScanEntry>> layers(mem);
-    auto add = [&](std::string_view name, std::string_view root, std::string_view prefix, bool is_mod = false) {
-        model.layer_names.emplace_back(name);
-        auto entries = scan_layer(root, prefix, mem);
-        if (is_mod) {  // mod 根下的 meta.ini 是 MO2/我们自己的元数据，不进农场
-            const std::string meta = prefix.empty() ? "meta.ini" : std::string(prefix) + "/meta.ini";
+    const std::size_t n = specs.size();
+    std::vector<std::unique_ptr<std::pmr::monotonic_buffer_resource>> arenas(n);
+    for (auto& a : arenas) a = std::make_unique<std::pmr::monotonic_buffer_resource>(std::pmr::new_delete_resource());
+    std::vector<vector<ScanEntry>> scanned;
+    scanned.reserve(n);
+    for (std::size_t i = 0; i < n; ++i) scanned.emplace_back(arenas[i].get());
+    const unsigned hw = std::max(1u, std::thread::hardware_concurrency());
+    parallel_for(n, std::min(hw, 8u), [&](std::size_t i) {
+        const auto& sp = specs[i];
+        auto entries = top_only ? scan_layer_top(sp.root, sp.prefix, arenas[i].get()) : scan_layer(sp.root, sp.prefix, arenas[i].get());
+        if (sp.is_mod) {  // mod 根下的 meta.ini 是 MO2/我们自己的元数据，不进农场
+            const std::string meta = sp.prefix.empty() ? "meta.ini" : sp.prefix + "/meta.ini";
             std::erase_if(entries, [&](const ScanEntry& e) { return !e.is_dir && ieq(e.rel, meta); });
         }
-        layers.push_back(std::move(entries));
+        scanned[i] = std::move(entries);
+    });
+    for (const auto& sp : specs) model.layer_names.emplace_back(sp.name);
+    model.merged = merge_listings(std::span<const vector<ScanEntry>>(scanned.data(), scanned.size()), mem);
+    for (auto& w : pre) model.merged.warnings.push_back(std::move(w));
+    std::sort(model.merged.warnings.begin(), model.merged.warnings.end(), [](const Warning& a, const Warning& b) {
+        return a.path != b.path ? a.path < b.path : a.message < b.message;
+    });
+    return model;
+}
+
+void collect_layers(const Instance& inst, std::string_view profile, bool data_only, std::vector<LayerSpec>& specs,
+                    std::vector<Warning>& pre, mr* mem) {
+    if (inst.cfg.game_dir.empty() || !is_dir(P(inst.cfg.game_dir)))
+        throw Error("config_invalid", "game_dir is not set or does not exist", S(inst.cfg.game_dir));
+    // data_only：只要每层的 Data/（游戏与根目录型 mod 先定位其 Data 目录，大小写不敏感）
+    auto data_of = [](const std::string& root) -> std::optional<std::string> {
+        auto d = find_dir_ci(P(root), "Data");
+        return d ? std::optional<std::string>(d->string()) : std::nullopt;
     };
-    add("<game>", inst.cfg.game_dir, "");
-    std::vector<Warning> pre;
+    if (data_only) {
+        if (auto d = data_of(S(inst.cfg.game_dir))) specs.push_back({"<game>", *d, "Data", false});
+        else specs.push_back({"<game>", "", "", false});  // 占位：保持层号与完整模型一致
+    } else {
+        specs.push_back({"<game>", S(inst.cfg.game_dir), "", false});
+    }
     for (const auto& m : list_mods(inst, profile, mem)) {
         if (m.separator || !m.enabled) continue;
         if (!m.exists) {
@@ -425,16 +465,30 @@ FarmModel build_farm_model(const Instance& inst, std::string_view profile, mr* m
             pre.push_back(std::move(w));
             continue;
         }
-        add(m.name, m.path, m.root ? "" : "Data", true);
+        if (data_only && m.root) {
+            if (auto d = data_of(S(m.path))) specs.push_back({S(m.name), *d, "Data", false});
+            else specs.push_back({S(m.name), "", "", false});
+        } else {
+            specs.push_back({S(m.name), S(m.path), m.root ? "" : "Data", true});
+        }
     }
-    if (is_dir(P(inst.overwrite_dir))) add("<overwrite>", inst.overwrite_dir, "Data");
+    if (is_dir(P(inst.overwrite_dir))) specs.push_back({"<overwrite>", S(inst.overwrite_dir), "Data", false});
+}
 
-    model.merged = merge_listings(layers, mem);
-    for (auto& w : pre) model.merged.warnings.push_back(std::move(w));
-    std::sort(model.merged.warnings.begin(), model.merged.warnings.end(), [](const Warning& a, const Warning& b) {
-        return a.path != b.path ? a.path < b.path : a.message < b.message;
-    });
-    return model;
+}  // namespace
+
+FarmModel build_farm_model(const Instance& inst, std::string_view profile, mr* mem) {
+    std::vector<LayerSpec> specs;
+    std::vector<Warning> pre;
+    collect_layers(inst, profile, false, specs, pre, mem);
+    return merge_layers(specs, pre, false, mem);
+}
+
+FarmModel build_data_top_model(const Instance& inst, std::string_view profile, mr* mem) {
+    std::vector<LayerSpec> specs;
+    std::vector<Warning> pre;
+    collect_layers(inst, profile, true, specs, pre, mem);
+    return merge_layers(specs, pre, true, mem);
 }
 
 Plan plan_instance(const Instance& inst, const FarmModel& model, mr* mem) {
@@ -449,9 +503,9 @@ Plan plan_instance(const Instance& inst, const FarmModel& model, mr* mem) {
     }
 }
 
-void apply_instance(const Instance& inst, const Plan& plan) {
+void apply_instance(const Instance& inst, const Plan& plan, const ApplyProgress& progress) {
     try {
-        apply_farm(plan, inst.farm_path);
+        apply_farm(plan, inst.farm_path, progress);
     } catch (const Error&) {
         throw;
     } catch (const std::runtime_error& e) {

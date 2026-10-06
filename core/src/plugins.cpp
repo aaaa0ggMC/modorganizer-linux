@@ -94,8 +94,8 @@ PluginList load_plugins(const Instance& inst, std::span<const string> forced_in,
     if (forced_in.empty()) forced = default_forced_plugins(mem);
     else forced.assign(forced_in.begin(), forced_in.end());
 
-    // 磁盘上可用的插件（赢家）
-    const FarmModel model = build_farm_model(inst, profile, mem);
+    // 磁盘上可用的插件（赢家）：插件只在 Data/ 顶层，不必遍历整棵树
+    const FarmModel model = build_data_top_model(inst, profile, mem);
     std::map<string, PluginRow, std::less<>> avail;  // 键：casefold 名
     std::vector<string> discovery_order;
     for (const auto& e : model.merged.entries) {

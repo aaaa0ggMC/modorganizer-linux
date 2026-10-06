@@ -31,6 +31,8 @@ struct ScanEntry {
 // 结果按 rel 字节序排序（确定性）。符号链接按指向目标的类型处理，目录链接不递归（防环）。
 // root 不存在 → 返回空。
 vector<ScanEntry> scan_layer(std::string_view root, std::string_view prefix = {}, mr* mem = default_mr());
+// 同 scan_layer，但只列 root 的直接子项（不递归）。插件列表之类只关心顶层的场合用它，省掉整棵树的遍历。
+vector<ScanEntry> scan_layer_top(std::string_view root, std::string_view prefix = {}, mr* mem = default_mr());
 
 struct MergedEntry {
     using allocator_type = mol::allocator_type;

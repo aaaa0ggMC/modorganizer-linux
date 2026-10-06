@@ -68,6 +68,7 @@
 
 - `schema`  自描述。data：`{tool,version,envelope,exit_codes,errors:[{code,hint}],global_options,commands:[{name,summary,effects[],needs[],confirm,idempotent,positionals[],options[{name,long,short,takes_value,description}]}]}`。`effects` ∈ `read|instance|farm|prefix|game_dir|launch|network`；`needs` ∈ `instance|nexus_key|host`；`confirm:true` = 执行前应向用户确认（`run`、`overwrite promote`）。
 - `next`  只读。data：`{ready,instance,steps:[{id,why,command[],effects,blocking,needs_human,confirm}]}`。来源：`doctor` 的各项检查（带 `fix` 的给出可直接执行的 argv，没有 `fix` 的 `needs_human:true`）、未完成的集合安装、缺少 Nexus key。`ready` = 没有 blocking 步骤；此时最后一步是 `run`（`confirm:true`）。没有实例时第一步是 `instance init`。
+- `overview`  只读，给 GUI 概览页用：一次取齐、同一进程里 doctor 与游戏层各只跑一次（代替 `version`+`instance show`+`doctor`+`next`+`mods list`+`plugins list` 的多进程往返）。data：`{version,has_instance,instance,profile,game_dir,game_version,farm_path,nexus_key,mods_total,mods_enabled,mods_missing,plugins_total,plugins_enabled,collections:[{slug,name,revision,installed,pending,failed,skipped}],doctor:<同 doctor 的 data>,next:<同 next 的 data>}`。没有实例时 `has_instance:false`，实例字段为空、`doctor.checks` 为空、`next` 只有 `instance init`。`nexus_key` 只表示有 key（不联网验证）。退出码恒为 0（doctor 的 error 体现在 `doctor.errors`）。
 - `logs [--file NAME] [--tail N]`  只读。列出前缀里 `My Games/Skyrim Special Edition/SKSE/` 的日志文件（新→旧），或读取其中一个的最后 N 行（默认 80、最多 2000）。data：`{dir,files:[{name,size,modified}],name,tail}`。`NAME` 只能是目录内的纯文件名。
 - 所有错误条目（`errors[]`）与警告多了 `hint` 字段：对该错误码的默认下一步建议。`doctor` 的每项检查多了 `fix`（argv 数组，空 = 需要人处理）。
 
