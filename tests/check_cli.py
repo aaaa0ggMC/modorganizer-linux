@@ -171,6 +171,16 @@ with tempfile.TemporaryDirectory(prefix='mol-cli-res-', dir='/tmp') as tmp_r:
     st, _ = call('-j', '-i', str(ri), 'collection', 'status', 'abc', code=4)
     assert st['data']['pending'][0]['decision'] == 'skip'
 checks += 1
+# docs：文档在构建时编进二进制，内容与源码树逐字节一致
+repo = Path(__file__).resolve().parent.parent
+dl, _ = call('-j', 'docs')
+assert [t['name'] for t in dl['data']['topics']] == ['guide', 'agent', 'cli', 'handbook', 'readme'] and dl['data']['markdown'] == '', dl
+for t in dl['data']['topics']:
+    d1, _ = call('-j', 'docs', t['name'])
+    assert d1['data']['topic'] == t['name'] and d1['data']['markdown'] == (repo / t['file']).read_text(), t['name']
+r = subprocess.run([exe, 'docs', 'GUIDE.md'], text=True, capture_output=True)
+assert r.returncode == 0 and r.stdout.startswith('# mo-linux 操作指南'), r.stdout[:80]
+call('-j', 'docs', 'nope', code=2)
 # overview：一次取齐；与单独的 next/doctor 一致（上面的 with 块结束时临时目录已删除，这里自建实例）
 with tempfile.TemporaryDirectory(prefix='mol-cli-ov-', dir='/tmp') as tmp_ov:
     ovr = Path(tmp_ov)

@@ -132,6 +132,8 @@ Result run_run(Context& ctx) {
     r.ok = true;
     r.exit_code = 0;
     r.command = ctx.command;
+    if (cow_lib.empty() && !ctx.args.get_bool("--no-cow", false))
+        r.add_warning("cow_unavailable", "libmol-cow.so not found next to mo-linux (or $MOL_COW_LIB): writes to existing files went through to the originals", "");
     r.set_data(std::move(d));
     return r;
 }

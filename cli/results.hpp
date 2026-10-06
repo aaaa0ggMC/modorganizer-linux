@@ -35,6 +35,19 @@ struct VersionData {
     std::pmr::string version;
 };
 
+// ---- docs -----------------------------------------------------------------
+struct DocTopicRow {
+    std::pmr::string name;   // docs 的 TOPIC
+    std::pmr::string file;   // 源码树里的路径
+    std::pmr::string title;
+    std::int64_t bytes = 0;
+};
+struct DocsData {
+    std::pmr::vector<DocTopicRow> topics;  // 编进二进制的全部文档
+    std::pmr::string topic;                // 给了 TOPIC 时
+    std::pmr::string markdown;             // 该文档全文
+};
+
 // ---- instance -------------------------------------------------------------
 // mo-linux.json 的内容（game…steam_root 九个字段，与 InstanceConfig 对应）
 struct ConfigData {

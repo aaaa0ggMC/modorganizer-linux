@@ -20,6 +20,7 @@ struct RouteEntry {
 inline constexpr RouteEntry kRoutes[] = {
     {"version", "version", &cli::run_version, {}, 0, ""},
     {"schema", "schema", &cli::run_schema, {}, 0, ""},
+    {"docs", "docs", &cli::run_docs, {}, 1, "[TOPIC]"},
     {"next", "next", &cli::run_next, {}, 0, ""},
     {"overview", "overview", &cli::run_overview, {}, 0, ""},
     {"logs", "logs", &cli::run_logs, cli::kOptLogs, 0, ""},
@@ -91,6 +92,7 @@ struct CommandMeta {
 
 inline constexpr CommandMeta kMeta[] = {
     {"version", "Print the tool version", "read", "", false, true},
+    {"docs", "Print the documentation compiled into the binary: no TOPIC lists them, `docs guide|agent|cli|handbook|readme` prints one in full", "read", "", false, true},
     {"schema", "Describe every command, option, effect and error code as JSON (start here)", "read", "", false, true},
     {"next", "Inspect the instance and list the recommended next commands", "read", "", false, true},
     {"overview", "Everything a dashboard needs in one call: instance, game version, doctor, next steps, mod/plugin counts, collections", "read", "", false, true},

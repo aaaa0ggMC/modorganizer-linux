@@ -10,6 +10,7 @@
 namespace cli {
 
 Result run_version(Context&);
+Result run_docs(Context&);
 Result run_game_info(Context&);
 Result run_plugins_sync(Context&);
 Result run_plugins_list(Context&);

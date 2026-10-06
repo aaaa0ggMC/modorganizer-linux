@@ -38,6 +38,9 @@ if(CLI_SRC)
   add_executable(mo-linux ${CLI_SRC})
   target_compile_options(mo-linux PRIVATE -Wall -Wextra)
   target_link_libraries(mo-linux PRIVATE mocore mol_alib6 ${CMAKE_DL_LIBS})
+  # `mo-linux docs`：cli/cmd_docs.cpp 用 #embed 把这些文档编进二进制
+  set_source_files_properties(cli/cmd_docs.cpp PROPERTIES OBJECT_DEPENDS
+    "${CMAKE_CURRENT_SOURCE_DIR}/docs/GUIDE.md;${CMAKE_CURRENT_SOURCE_DIR}/docs/AGENT.md;${CMAKE_CURRENT_SOURCE_DIR}/docs/CLI.md;${CMAKE_CURRENT_SOURCE_DIR}/HANDBOOK.md;${CMAKE_CURRENT_SOURCE_DIR}/README.md")
 endif()
 
 # ---- libmol-cow.so：工具运行时的写时复制（LD_PRELOAD 注入 Wine 进程，见 cow/mol_cow.c）----------

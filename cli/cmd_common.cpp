@@ -100,6 +100,7 @@ std::optional<Result> check_positionals(Context& ctx, std::size_t expected,
                                         std::string_view arg_name) {
     const std::size_t n = ctx.args.positionals.size();
     if (n == expected) return std::nullopt;
+    if (n == 0 && arg_name.starts_with('[')) return std::nullopt;  // "[NAME]" = 可省略
     if (n > expected) {
         const std::string extra(ctx.args.positionals[expected]);
         return make_usage_error(std::string(ctx.command) + ": unexpected argument '" + extra + "'",
