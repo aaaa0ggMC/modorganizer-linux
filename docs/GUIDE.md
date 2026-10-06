@@ -64,10 +64,12 @@ mo-linux next                                     # 不知道下一步做什么�
 
 ```sh
 mo-linux collection readme SLUG        # 先读作者的说明：游戏版本、是否要降级、ENB、可选项、装完要跑的工具
-mo-linux collection inspect SLUG       # mod 列表、大小、目标游戏版本（game_versions）
+mo-linux collection inspect SLUG       # mod 列表、真实下载量、目标游戏版本；不需要实例（search 里的大小是页面声明值，常偏小）
 mo-linux collection install SLUG       # 可中断、可重跑；已完成的不重做
 mo-linux collection status SLUG        # 已装 / 待处理 / 失败
 ```
+
+`collection install` 开始前会打印预检：要下多少、`downloads/` 还剩多少空间、游戏版本是否对得上；有 `disk_space` / `game_version` 警告时先停下处理（空间至少留真实下载量的 2 倍）。下载进度事件带速度 `rate` 与剩余时间 `eta`。
 
 `collection install` 从不中途提问。需要你决定的条目记为 **pending**，其他照装，最后退出码 4。逐条处理后再跑一次 `install`：
 

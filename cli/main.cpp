@@ -8,6 +8,10 @@
 //   （cli/output.hpp → cli/cmd_common.hpp，以及 cli/parse.hpp、cli/commands.hpp），
 //   顺序不能随意调换——parse.hpp 放在 output.hpp 之后，是为了让它内部的 <span>/
 //   <string_view>/args.hpp 都已成为无操作的 include guard 命中。
+#include <sys/stat.h>
+#include <unistd.h>
+
+#include <cstdlib>
 #include <cstdio>
 #include <string>
 #include <vector>
@@ -231,6 +235,16 @@ int main(int argc, char** argv) {
                 if (!eerr.empty()) {
                     inv.result = cli::make_usage_error(eerr, inv.ctx);
                     return CommandOutput::with_code(inv.result.exit_code);
+                }
+                // fd:N 与 stdout 是同一个文件：NDJSON 进度会和 --json 的 envelope 混在一起（envelope 是最后一行）
+                if (sink.active() && globals.json && globals.events.starts_with("fd:")) {
+                    struct stat a{}, b{};
+                    const int n = std::atoi(globals.events.c_str() + 3);
+                    if (::fstat(n, &a) == 0 && ::fstat(STDOUT_FILENO, &b) == 0 && a.st_dev == b.st_dev && a.st_ino == b.st_ino) {
+                        lg(Severity::Warn) << "--events " << globals.events << " writes to stdout: progress lines and the JSON envelope share one stream "
+                                           << "(the envelope is the last line); use fd:3 (3>file or a pipe), fifo:PATH or unix:PATH to keep them apart" << endlog;
+                        lg.logger.flush();
+                    }
                 }
                 if (!sink.active() && !sink.disabled_reason().empty()) {
                     lg(Severity::Warn) << "events sink disabled: " << sink.disabled_reason()

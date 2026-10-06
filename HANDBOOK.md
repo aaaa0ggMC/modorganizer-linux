@@ -284,6 +284,8 @@ Claude 阶段的提交带 `Co-Authored-By` 与 `Claude-Session`；接续提交�
 | R19 | CreateBSA 的清单 Hash 与我们重建的 BSA 不一致（作者打包器的 padding/压缩编码差异）只提示不失败；若某个游戏版本对 padding 字节敏感则会暴露——目前所有真实 BSA 的 padding 都是垃圾值，游戏照常加载 | 低 |
 | R20 | TransformedTexture 的编码质量/mip 滤波与 DirectXTex 不同：BC7 只用 mode 6（单子集）、没有感知误差优化；法线图（BC5/BC7 法线）不做重归一化，色彩空间（sRGB）不做线性空间缩放。视觉上应无明显差异，但极端高频贴图可能略逊 | 低 |
 | R21 | LOOT 近似排序：masterlist 分支固定为 v0.26（404 时回退 master），将来分支名变化要跟；带 condition 的规则被忽略可能漏掉「仅当装了 X 才需要」的顺序约束 | 低 |
+| R23 | 集合复用已装 mod 的键是 `(modid, fileid)` + FOMOD 选择指纹（`meta.ini` 的 `mol_fomod`，2026-10-06 起）。MO2 / `nexus install` 装的没有指纹：清单要求具体选择时不复用（多装一份，安全但占空间）；指纹按清单里选项的顺序算，两个集合选了相同选项但顺序不同也会多装一份 | 低 |
+| R24 | 多个实例共享 mods（不只是 downloads）：`collection install --downloads DIR` 只共享压缩包；mod 目录的共享（全局 sink + 引用计数/GC + 农场对符号链接的感知）未做 | 低 |
 | R22 | **部分解决（COW）**：农场内运行的工具可任意改/删/移文件，结果进 overwrite / overwrite-root。仍有：农场**之外**的工具看不到虚拟 Data。原问题：整合包里依赖 usvfs 虚拟文件系统的外部工具（Synthesis、Pandora、BodySlide 的输出写入 overwrite 等）在农场里只能看到合并后的符号链接树；它们写出的新文件会落到农场里的真实文件，`overwrite capture` 会在下次启动前收走，但**工具运行当下**不会实时落进 overwrite | 中 |
 | R18 | Wabbajack 安装对每个压缩包是「完整解压到临时目录再复制」，大压缩包会短时占双倍磁盘；Nexus 来源按文件名/大小+xxh64 匹配本地缓存，免费账号全部变 pending；清单里的 Nexus `GameName` 直接小写当域名 | 低 |
 | R17 | `skse install` 依赖 Nexus 主文件标记与 SKSE 的 dll 命名规则（`skse64_<a>_<b>_<c>.dll`）；官方改规则时要跟 | 低 |

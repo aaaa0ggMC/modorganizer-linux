@@ -144,6 +144,29 @@ TEST(time_based_throttle_emits_even_when_done_barley_moves) {
     ::close(fds[0]);
 }
 
+TEST(progress_carries_rate_and_eta_after_a_second) {
+    int fds[2];
+    CHECK(::pipe(fds) == 0);
+    g_clock_ms = 0;
+    cli::EventSink sink;
+    CHECK(sink.open("fd:" + std::to_string(fds[1]), std::pmr::get_default_resource()).empty());
+    sink.set_clock(&advancing_clock);  // 每次调用 +100ms
+    sink.start("download");
+    // 每次 progress 消耗两次时钟（采样 + 节流）= 200ms，每次 +2000 → 10000/s
+    for (unsigned long long d = 2000; d <= 40000; d += 2000) sink.progress("download", d, 100000);
+    ::close(fds[1]);
+    const std::string out = drain(fds[0]);
+    ::close(fds[0]);
+    const auto first = out.find("\"rate\":");
+    CHECK(first != std::string::npos);
+    CHECK(out.find("{\"event\":\"progress\",\"op\":\"download\",\"done\":2000,\"total\":100000}") != std::string::npos);  // 起步还没有速率
+    const auto last = out.rfind("\n", out.size() - 2);
+    const std::string tail = out.substr(last + 1);
+    CHECK(tail.find("\"done\":40000") != std::string::npos);
+    CHECK(tail.find("\"rate\":") != std::string::npos);
+    CHECK(tail.find("\"eta\":") != std::string::npos);
+}
+
 TEST(epipe_is_silent_and_disables_the_sink) {
     int fds[2];
     CHECK(::pipe(fds) == 0);

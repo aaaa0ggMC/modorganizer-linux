@@ -17,6 +17,7 @@
 #include "mol/mod_install.hpp"
 #include "mol/parallel.hpp"
 #include "mol/plugins.hpp"
+#include "mol/xxh64.hpp"
 
 import alib6;
 
@@ -321,9 +322,10 @@ std::string find_cached(const fs::path& dl, const Source& s) {
     return {};
 }
 
-// modlist 里已有的 Nexus 文件：(modid, fileid) → mod 目录名（来自 meta.ini）。
-std::map<std::pair<std::int64_t, std::int64_t>, std::string> index_nexus_files(const Instance& inst, std::string_view profile) {
-    std::map<std::pair<std::int64_t, std::int64_t>, std::string> out;
+// modlist 里已有的 Nexus 文件：(modid, fileid) → (mod 目录名, FOMOD 选择指纹)（来自 meta.ini 的 modid/fileid/mol_fomod）。
+using NexusIndex = std::map<std::pair<std::int64_t, std::int64_t>, std::pair<std::string, std::string>>;
+NexusIndex index_nexus_files(const Instance& inst, std::string_view profile) {
+    NexusIndex out;
     for (const auto& md : list_mods(inst, profile)) {
         if (md.separator || !md.exists || md.nexus_id <= 0) continue;
         const Ini meta = Ini::load(std::string(md.path) + "/meta.ini");
@@ -331,9 +333,22 @@ std::map<std::pair<std::int64_t, std::int64_t>, std::string> index_nexus_files(c
         std::int64_t f = 0;
         if (!fid || fid->empty()) continue;
         for (char ch : *fid) { if (ch < '0' || ch > '9') { f = 0; break; } f = f * 10 + (ch - '0'); }
-        if (f > 0) out.emplace(std::make_pair(md.nexus_id, f), fs::path(std::string(md.path)).filename().string());
+        if (f > 0)
+            out.emplace(std::make_pair(md.nexus_id, f),
+                        std::make_pair(fs::path(std::string(md.path)).filename().string(), std::string(meta.get("General", "mol_fomod").value_or(""))));
     }
     return out;
+}
+
+// FOMOD 选择的指纹（写进 meta.ini 的 mol_fomod；同一个 Nexus 文件只有选择相同才复用）：
+// "choices:<xxh64>" | "defaults" | ""（没走 FOMOD，或不知道——MO2 / nexus install 装的）
+std::string fomod_fingerprint(const fomod::Choices* choices, bool defaults) {
+    if (choices) {
+        char buf[17];
+        std::snprintf(buf, sizeof buf, "%016llx", static_cast<unsigned long long>(xxh64(fomod::choices_to_json(*choices))));
+        return std::string("choices:") + buf;
+    }
+    return defaults ? "defaults" : "";
 }
 
 // 清单里的 SKSE64 条目（外部来源）：按链接或名字认。
@@ -432,23 +447,31 @@ Report install_collection(const Instance& inst, const NexusClient* client, const
     std::map<std::string, std::string> cached;    // key → 本地已有的压缩包（不需要下载）
     std::map<std::string, Fetched> fetched;       // key → 并行下载的结果
     {
+        // download 进度的 total 恒为「本次要装的 mod 的文件总大小」（跳过的、未选的可选 mod 不算），
+        // 已经在手的（装好的、下载过的、用户给的压缩包）从一开始就算进 done：首次运行与中断续跑的 total 相同。
         std::vector<std::size_t> todo;
+        std::uint64_t total = 0, have = 0;
+        auto size_of = [](const Mod& m) { return static_cast<std::uint64_t>(std::max<std::int64_t>(m.source.file_size, 0)); };
         for (const std::size_t idx : order) {
             const Mod& m = c.mods[idx];
             const std::string key = m.key();
+            const Override ov = state.overrides.count(key) ? state.overrides.at(key) : Override{};
+            if (ov.skip || (m.optional && !opt.include_optional)) continue;
+            total += size_of(m);
             const auto sit = state.mods.find(key);
             if (sit != state.mods.end() && sit->second.status == "installed" && !sit->second.mod_dir.empty() &&
-                fs::is_directory(fs::path(std::string(inst.mods_dir)) / sit->second.mod_dir, ec))
+                fs::is_directory(fs::path(std::string(inst.mods_dir)) / sit->second.mod_dir, ec)) {
+                have += size_of(m);
                 continue;
-            const Override ov = state.overrides.count(key) ? state.overrides.at(key) : Override{};
-            if (ov.skip || (m.optional && !opt.include_optional) || (m.has_patches && ov.archive.empty()) || !ov.archive.empty()) continue;
-            if (sit != state.mods.end() && !sit->second.archive.empty() && fs::is_regular_file(sit->second.archive, ec)) continue;
-            if (auto p = find_cached(downloads, m.source); !p.empty()) { cached[key] = p; continue; }
+            }
+            if (!ov.archive.empty()) { have += size_of(m); continue; }
+            if (m.has_patches) continue;
+            if (sit != state.mods.end() && !sit->second.archive.empty() && fs::is_regular_file(sit->second.archive, ec)) { have += size_of(m); continue; }
+            if (auto p = find_cached(downloads, m.source); !p.empty()) { cached[key] = p; have += size_of(m); continue; }
             if (client && (m.source.type == "nexus" || (m.source.type == "direct" && !m.source.url.empty()))) todo.push_back(idx);
         }
         if (!todo.empty()) {
-            std::uint64_t total = 0;
-            for (auto idx : todo) total += static_cast<std::uint64_t>(std::max<std::int64_t>(c.mods[idx].source.file_size, 0));
+            if (opt.progress) opt.progress("download", "", have, total);
             std::vector<std::atomic<std::uint64_t>> cur(todo.size());
             std::mutex mu;
             std::size_t finished = 0;
@@ -457,7 +480,7 @@ Report install_collection(const Instance& inst, const NexusClient* client, const
                 Fetched f = fetch_one(inst, client, m, [&](std::uint64_t d, std::uint64_t) {
                     cur[i].store(d);
                     if (!opt.progress) return;
-                    std::uint64_t sum = 0;
+                    std::uint64_t sum = have;
                     for (auto& x : cur) sum += x.load();
                     std::lock_guard<std::mutex> g(mu);
                     opt.progress("download", "", sum, total);
@@ -469,7 +492,7 @@ Report install_collection(const Instance& inst, const NexusClient* client, const
         }
     }
 
-    std::optional<std::map<std::pair<std::int64_t, std::int64_t>, std::string>> nexus_files;  // 首次用到时建
+    std::optional<NexusIndex> nexus_files;  // 首次用到时建
     for (const std::size_t idx : order) {
         const Mod& m = c.mods[idx];
         const std::string key = m.key();
@@ -540,8 +563,16 @@ Report install_collection(const Instance& inst, const NexusClient* client, const
         // 同一个 Nexus 文件已经装在实例里（另一个集合、`nexus install` 或 MO2 装的，meta.ini 的 modid/fileid 一致）→ 复用，不再装一份
         if (ov.archive.empty() && m.source.type == "nexus" && m.source.mod_id > 0 && m.source.file_id > 0) {
             if (!nexus_files) nexus_files = index_nexus_files(inst, profile);
-            if (auto hit = nexus_files->find({m.source.mod_id, m.source.file_id}); hit != nexus_files->end()) {
-                const std::string dir = hit->second;
+            // 选择不同就不复用（否则两个集合/两个 profile 选了不同 FOMOD 选项会串味）：
+            // 想要具体选择 → 指纹必须相同；想要默认/不需要选择 → 对方没记指纹（多半没 FOMOD）或也是默认即可
+            const fomod::Choices* want_choices = ov.has_choices ? &ov.choices : m.has_choices ? &m.choices : nullptr;
+            const std::string want = fomod_fingerprint(want_choices, ov.fomod_defaults || opt.fomod_defaults);
+            const auto compatible = [&](const std::string& have) {
+                if (want_choices) return have == want;
+                return have.empty() || have == "defaults";
+            };
+            if (auto hit = nexus_files->find({m.source.mod_id, m.source.file_id}); hit != nexus_files->end() && compatible(hit->second.second)) {
+                const std::string dir = hit->second.first;
                 ms.status = "installed";
                 ms.mod_dir = dir;
                 ms.note = "already installed (same Nexus file)";
@@ -642,6 +673,7 @@ Report install_collection(const Instance& inst, const NexusClient* client, const
                 set_mod_meta(md, "modid", std::to_string(m.source.mod_id));
                 set_mod_meta(md, "fileid", std::to_string(m.source.file_id));
                 if (!m.version.empty()) set_mod_meta(md, "version", m.version);
+                if (res.fomod) set_mod_meta(md, "mol_fomod", fomod_fingerprint(io.fomod == FomodMode::Choices ? &io.choices : nullptr, io.fomod == FomodMode::Defaults));
             }
             ms.status = "installed";
             ms.mod_dir = std::string(res.name);

@@ -122,6 +122,7 @@ constexpr OptionSpec kOptCollectionInstall[] = {
     {"no-optional", "", "--no-optional", "Skip the collection's optional mods", false},
     {"fomod-defaults", "", "--fomod-defaults", "Use FOMOD defaults where the collection gives no choices", false},
     {"jobs", "", "--jobs", "Parallel downloads (1-16, default 4 or $MOL_JOBS)", true},
+    {"downloads", "", "--downloads", "Downloads directory (default: <instance>/downloads); share one across instances or disks", true},
 };
 constexpr OptionSpec kOptCollectionResolve[] = {
     {"mod", "", "--mod", "Mod key from the pending list (collection mod tag or name)", true},

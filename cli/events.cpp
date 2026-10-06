@@ -208,8 +208,33 @@ bool EventSink::should_emit(unsigned long long done, unsigned long long total) {
     return false;
 }
 
+void EventSink::sample(std::string_view op, unsigned long long done) {
+    if (!clock_) return;
+    const unsigned long long now = clock_();
+    auto it = samples_.find(op);
+    if (it == samples_.end()) it = samples_.emplace(std::string(op), std::deque<std::pair<unsigned long long, unsigned long long>>{}).first;
+    auto& q = it->second;
+    if (!q.empty() && done < q.back().second) q.clear();         // 新一轮（或换了单位）
+    if (!q.empty() && now < q.back().first + 200) {               // 至多每 200ms 记一个点
+        q.back().second = done;
+        return;
+    }
+    q.emplace_back(now, done);
+    while (q.size() > 2 && now - q.front().first > 5000) q.pop_front();
+}
+
+double EventSink::rate_of(std::string_view op) const {
+    const auto it = samples_.find(op);
+    if (it == samples_.end() || it->second.size() < 2) return 0;
+    const auto& a = it->second.front();
+    const auto& b = it->second.back();
+    if (b.first < a.first + 1000 || b.second <= a.second) return 0;  // 不足 1 秒或没动：不给速率
+    return static_cast<double>(b.second - a.second) * 1000.0 / static_cast<double>(b.first - a.first);
+}
+
 bool EventSink::emit_line(std::string_view event, std::string_view op, bool has_count,
-                          unsigned long long done, unsigned long long total, bool ok_flag, std::string_view item) {
+                          unsigned long long done, unsigned long long total, bool ok_flag, std::string_view item,
+                          double rate) {
     if (!active_) return false;
     struct Event {
         mol::string event;
@@ -246,6 +271,10 @@ bool EventSink::emit_line(std::string_view event, std::string_view op, bool has_
     } else {
         data = alib6::to_adata(Event{mol::string(event, &arena), mol::string(op, &arena)}, &arena);
     }
+    if (has_count && rate > 0) {
+        data["rate"] = static_cast<std::int64_t>(rate + 0.5);
+        if (total > done) data["eta"] = static_cast<std::int64_t>(static_cast<double>(total - done) / rate + 0.5);
+    }
     alib6::JSONConfig config;
     config.compact_lines = true;
     config.compact_spaces = true;
@@ -267,13 +296,33 @@ void EventSink::start(std::string_view op) {
 
 void EventSink::progress(std::string_view op, unsigned long long done, unsigned long long total, std::string_view item) {
     if (!active_) return;
+    sample(op, done);
     const bool new_item = !item.empty() && item != last_item_;
     if (!new_item && !should_emit(done, total)) return;
-    if (emit_line("progress", op, true, done, total, true, item)) {
+    if (emit_line("progress", op, true, done, total, true, item, rate_of(op))) {
         last_done_ = done;
         last_ms_ = clock_();
         if (!item.empty()) last_item_.assign(item);
     }
+}
+
+void EventSink::note(std::string_view op, std::string_view code, std::string_view message) {
+    if (!active_) return;
+    struct Note {
+        mol::string event;
+        mol::string op;
+        mol::string code;
+        mol::string message;
+    };
+    std::pmr::monotonic_buffer_resource arena;
+    const alib6::AData data = alib6::to_adata(Note{mol::string("note", &arena), mol::string(op, &arena), mol::string(code, &arena), mol::string(message, &arena)}, &arena);
+    alib6::JSONConfig config;
+    config.compact_lines = true;
+    config.compact_spaces = true;
+    std::string line;
+    alib6::JSON(config).dump(line, data);
+    line += '\n';
+    if (write_bytes(line.data(), line.size())) ++emitted_;
 }
 
 void EventSink::done(std::string_view op, bool ok) {

@@ -295,17 +295,63 @@ TEST(shared_nexus_files_are_reused_and_name_clashes_are_case_insensitive) {
     CHECK(fs::exists(t.dir / "inst/mods/Jk's Mod/meshes/a.nif"));
 }
 
+TEST(same_nexus_file_with_different_fomod_choices_is_not_reused) {
+    if (!have_zip()) return;
+    Tmp t;
+    fs::create_directories(t.dir / "src/fomod/fomod");
+    std::ofstream(t.dir / "src/fomod/fomod/ModuleConfig.xml") << R"(<config><installSteps><installStep name="S"><optionalFileGroups><group name="G" type="SelectExactlyOne"><plugins order="Explicit">
+<plugin name="A"><files><file source="a.txt" destination="chosen.txt"/></files><typeDescriptor><type name="Optional"/></typeDescriptor></plugin>
+<plugin name="B"><files><file source="b.txt" destination="chosen.txt"/></files><typeDescriptor><type name="Optional"/></typeDescriptor></plugin>
+</plugins></group></optionalFileGroups></installStep></installSteps></config>)";
+    put(t.dir / "src/fomod/a.txt", "A");
+    put(t.dir / "src/fomod/b.txt", "B");
+    fs::create_directories(t.dir / "inst/downloads");
+    zip_dir(t.dir / "src/fomod", t.dir / "inst/downloads/fx.zip");  // 已下载：按 大小 + md5 找到，不联网
+    const std::string md5 = md5_file((t.dir / "inst/downloads/fx.zip").string());
+    const auto sz = fs::file_size(t.dir / "inst/downloads/fx.zip");
+    const auto coll_choosing = [&](const std::string& pick) {
+        return parse_collection(R"({"info":{"name":"C","domainName":"skyrimspecialedition"},"mods":[{"name":"Fx","version":"1","optional":false,"source":{"type":"nexus","modId":7,"fileId":8,"fileSize":)" +
+                                std::to_string(sz) + R"(,"md5":")" + md5 + R"(","tag":"fx"},"choices":{"type":"fomod","options":[{"name":"S","groups":[{"name":"G","choices":[{"name":")" + pick +
+                                R"(","idx":0}]}]}]}}],"modRules":[]})");
+    };
+    Instance inst;
+    inst.root.assign((t.dir / "inst").string());
+    inst.mods_dir.assign((t.dir / "inst/mods").string());
+    inst.profiles_dir.assign((t.dir / "inst/profiles").string());
+    inst.downloads_dir.assign((t.dir / "inst/downloads").string());
+    inst.overwrite_dir.assign((t.dir / "inst/overwrite").string());
+    inst.cfg.game.assign("skyrimse");
+    inst.cfg.profile.assign("Default");
+    fs::create_directories(t.dir / "inst/profiles/Default");
+    put(t.dir / "game/Data/Skyrim.esm");
+    inst.cfg.game_dir.assign((t.dir / "game").string());
+
+    State a; a.slug = "a";
+    CHECK(install_collection(inst, nullptr, coll_choosing("A"), a, {}, {}).complete());
+    State b; b.slug = "b";
+    CHECK(install_collection(inst, nullptr, coll_choosing("B"), b, {}, {}).complete());
+    CHECK(a.mods["fx"].mod_dir != b.mods["fx"].mod_dir);  // 选择不同：各装一份
+    CHECK_EQ(slurp(t.dir / "inst/mods" / a.mods["fx"].mod_dir / "chosen.txt"), std::string("A"));
+    CHECK_EQ(slurp(t.dir / "inst/mods" / b.mods["fx"].mod_dir / "chosen.txt"), std::string("B"));
+    State c; c.slug = "c";
+    CHECK(install_collection(inst, nullptr, coll_choosing("A"), c, {}, {}).complete());
+    CHECK_EQ(c.mods["fx"].mod_dir, a.mods["fx"].mod_dir);  // 选择相同：复用
+}
+
 TEST(downloads_run_in_parallel_and_installs_stay_ordered) {
     if (!have_zip()) return;
     Tmp t;
     constexpr int N = 6;
+    std::uint64_t sizes[N] = {};
     std::string mods_json;
     for (int i = 0; i < N; ++i) {
         put(t.dir / ("src/m" + std::to_string(i) + "/meshes/f.nif"), ("M" + std::to_string(i)).c_str());
         zip_dir(t.dir / ("src/m" + std::to_string(i)), t.dir / ("m" + std::to_string(i) + ".zip"));
         if (i) mods_json += ",";
         mods_json += R"({"name":"Mod)" + std::to_string(i) + R"(","version":"1","optional":false,"source":{"type":"nexus","modId":)" + std::to_string(100 + i) + R"(,"fileId":)" +
-                     std::to_string(200 + i) + R"(,"tag":"t)" + std::to_string(i) + R"("}})";
+                     std::to_string(200 + i) + R"(,"fileSize":)" + std::to_string(fs::file_size(t.dir / ("m" + std::to_string(i) + ".zip"))) +
+                     R"(,"tag":"t)" + std::to_string(i) + R"("}})";
+        sizes[i] = fs::file_size(t.dir / ("m" + std::to_string(i) + ".zip"));
     }
     const Collection coll = parse_collection(std::string(R"({"info":{"name":"P","domainName":"skyrimspecialedition"},"mods":[)") + mods_json + R"(],"modRules":[]})");
 
@@ -348,8 +394,15 @@ TEST(downloads_run_in_parallel_and_installs_stay_ordered) {
     InstallOptions opt;
     opt.profile = "Default";
     opt.jobs = 4;
-    std::uint64_t last_total = 0;
-    opt.progress = [&](std::string_view stage, std::string_view, std::uint64_t d, std::uint64_t) { if (stage == "download") last_total = d; };
+    std::uint64_t all = 0;
+    for (auto z : sizes) all += z;
+    std::vector<std::pair<std::uint64_t, std::uint64_t>> dl;  // download 事件 (done, total)
+    std::mutex dl_mu;
+    opt.progress = [&](std::string_view stage, std::string_view, std::uint64_t d, std::uint64_t tot) {
+        if (stage != "download") return;
+        std::lock_guard<std::mutex> g(dl_mu);
+        dl.emplace_back(d, tot);
+    };
     const auto t0 = std::chrono::steady_clock::now();
     const Report r = install_collection(inst, &client, coll, st, opt, {});
     const auto ms = std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::steady_clock::now() - t0).count();
@@ -357,9 +410,29 @@ TEST(downloads_run_in_parallel_and_installs_stay_ordered) {
     CHECK_EQ(r.installed, std::size_t{static_cast<std::size_t>(N)});
     CHECK(peak.load() >= 3);   // 确实并发了
     CHECK(ms < 1500);          // 串行至少 6×300ms = 1.8s
-    (void)last_total;
+    // download 的 total = 全部文件大小，结束时 done == total
+    CHECK(!dl.empty());
+    CHECK_EQ(dl.front().first, std::uint64_t{0});
+    for (const auto& e : dl) CHECK_EQ(e.second, all);
+    CHECK_EQ(dl.back().first, all);
     // 安装顺序仍是清单顺序：modlist 里后面的优先级更高
     const auto mods = list_mods(inst, "Default");
     CHECK_EQ(mods.size(), std::size_t{static_cast<std::size_t>(N)});
     for (int i = 0; i < N; ++i) CHECK_EQ(std::string(mods[static_cast<std::size_t>(i)].name), "Mod" + std::to_string(i));
+
+    // 「中断后续跑」：后三个的压缩包与安装都没了 → 再跑一次，total 不变，done 从前三个的大小起步
+    for (int i = 3; i < N; ++i) {
+        const auto& ms = st.mods["t" + std::to_string(i)];
+        fs::remove(ms.archive);
+        fs::remove(std::string(ms.archive) + ".meta");
+        fs::remove_all(t.dir / "inst/mods" / ms.mod_dir);
+        st.mods.erase("t" + std::to_string(i));
+    }
+    dl.clear();
+    const Report r2 = install_collection(inst, &client, coll, st, opt, {});
+    CHECK(r2.complete());
+    CHECK(!dl.empty());
+    CHECK_EQ(dl.front().first, sizes[0] + sizes[1] + sizes[2]);
+    for (const auto& e : dl) CHECK_EQ(e.second, all);
+    CHECK_EQ(dl.back().first, all);
 }

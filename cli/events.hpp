@@ -5,6 +5,7 @@
 //   每行一个 JSON：{"event":"progress","op":"apply","done":120,"total":5000}
 //   开始 {"event":"start","op":"apply"}；结束 {"event":"done","op":"apply","ok":true}
 //   progress 至多每 50ms 或每 1% 发一次；start/done 必发。
+//   采样满 1 秒后 progress 多带 "rate"（done 的单位/秒，最近约 5 秒的平均）与 "eta"（秒，有 total 时）。
 //   对端关闭（EPIPE）静默停止发送，命令照常完成。
 //   fifo:PATH  不存在则 mkfifo，非阻塞写打开，无读端则放弃（不阻塞命令）。
 //   unix:PATH  SOCK_STREAM connect，失败则放弃。
@@ -14,6 +15,9 @@
 // 公共头不 import；实现使用 alib6 JSON，POSIX 细节藏在 events.cpp 里。
 // 节流参数（时钟 / 间隔 / 百分比）可注入，便于单测。
 #include <cstddef>
+#include <deque>
+#include <map>
+#include <utility>
 #include <string>
 #include <string_view>
 
@@ -46,6 +50,8 @@ public:
     // item 变化的那一次不受节流限制，保证 GUI 能看到每个条目。
     void progress(std::string_view op, unsigned long long done, unsigned long long total, std::string_view item = {});
     void done(std::string_view op, bool ok);
+    // 立即发出的提示（不节流）：{"event":"note","op":…,"code":…,"message":…}；例如 collection install 开始前的预检
+    void note(std::string_view op, std::string_view code, std::string_view message);
 
     // ---- 观测 -------------------------------------------------------------
     bool active() const { return active_; }
@@ -54,7 +60,11 @@ public:
 
 private:
     bool emit_line(std::string_view event, std::string_view op, bool has_count,
-                   unsigned long long done, unsigned long long total, bool ok_flag, std::string_view item = {});
+                   unsigned long long done, unsigned long long total, bool ok_flag, std::string_view item = {},
+                   double rate = 0);
+    // 速率：每个 op 一个最近 ~5 秒的 (ms, done) 采样窗口；done 回退（新一轮）时清空
+    void sample(std::string_view op, unsigned long long done);
+    double rate_of(std::string_view op) const;
     bool should_emit(unsigned long long done, unsigned long long total);
     bool write_bytes(const char* data, std::size_t n);
 
@@ -71,6 +81,7 @@ private:
     unsigned long long last_ms_ = 0;
     unsigned long long last_done_ = 0;
     std::string last_item_;
+    std::map<std::string, std::deque<std::pair<unsigned long long, unsigned long long>>, std::less<>> samples_;
 };
 
 }  // namespace cli

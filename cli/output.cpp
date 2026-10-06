@@ -21,6 +21,22 @@ void add(std::pmr::vector<std::pmr::string>& lines, const std::string& text, mol
     lines.push_back(mol::string(std::string_view(text), mem));
 }
 
+std::string human(long long n) {
+    if (n < 0) return "?";
+    const char* u[] = {"B", "KB", "MB", "GB", "TB"};
+    double v = static_cast<double>(n);
+    int i = 0;
+    while (v >= 1024 && i < 4) { v /= 1024; ++i; }
+    char buf[32];
+    std::snprintf(buf, sizeof buf, i == 0 ? "%.0f %s" : "%.2f %s", v, u[i]);
+    return buf;
+}
+
+const alib6::AData* arr(const alib6::AData& d, std::string_view key) {
+    const alib6::AData* a = adata::field(d, key);
+    return a && a->is_array() ? a : nullptr;
+}
+
 void render_instance_show(const alib6::AData& d, std::pmr::vector<std::pmr::string>& lines,
                           mol::mr* mem) {
     add(lines, "instance " + S(d, "root"), mem);
@@ -151,6 +167,42 @@ std::pmr::vector<std::pmr::string> render_text(const Result& r, mol::mr* mem) {
                 add(lines, "  " + name + S(t, "title"), mem);
             }
         }
+    } else if (cmd == "nexus whoami" || cmd == "nexus login") {
+        // Premium 决定集合能否自动下载：文本模式也要直接看到
+        const bool premium = adata::boolean(r.data, "is_premium");
+        add(lines, S(r.data, "name") + " (user " + std::to_string(adata::integer(r.data, "user_id")) + ") — " +
+                       (premium ? "Premium: downloads run automatically" : "free account: each download needs an nxm:// link from the website (`mo-linux nxm register`)") +
+                       (adata::boolean(r.data, "is_supporter") && !premium ? ", supporter" : ""), mem);
+        if (!S(r.data, "key_path").empty()) add(lines, "key saved to " + S(r.data, "key_path"), mem);
+    } else if (cmd == "collection inspect") {
+        add(lines, S(r.data, "name") + " (" + S(r.data, "slug") + ", revision " + std::to_string(adata::integer(r.data, "revision")) + ") by " + S(r.data, "author"), mem);
+        if (!S(r.data, "url").empty()) add(lines, S(r.data, "url"), mem);
+        std::string sz = std::to_string(adata::integer(r.data, "mod_count")) + " mods, " + human(adata::integer(r.data, "total_size")) + " to download";
+        if (adata::integer(r.data, "optional_size") > 0) sz += " (" + human(adata::integer(r.data, "optional_size")) + " of it optional)";
+        if (adata::integer(r.data, "declared_total_size") > 0) sz += "; the page declares " + human(adata::integer(r.data, "declared_total_size"));
+        add(lines, sz, mem);
+        if (const auto* src = arr(r.data, "sources")) {
+            std::string s = "sources:";
+            for (const auto& x : src->array()) s += " " + S(x, "type") + " " + std::to_string(adata::integer(x, "count")) + " (" + human(adata::integer(x, "size")) + ")";
+            add(lines, s, mem);
+        }
+        std::string gvs;
+        if (const auto* g = arr(r.data, "game_versions"))
+            for (const auto& v : g->array()) gvs += (gvs.empty() ? "" : ", ") + std::string(v.try_to<std::string_view>().value_or(""));
+        if (!gvs.empty()) add(lines, "game version: " + gvs + (S(r.data, "game_version").empty() ? "" : " (this game: " + S(r.data, "game_version") + ")"), mem);
+        if (!adata::boolean(r.data, "has_instance")) add(lines, "(no instance: install status not shown)", mem);
+        if (!S(r.data, "description").empty()) add(lines, "read the author's notes first: mo-linux collection readme " + S(r.data, "slug"), mem);
+    } else if (cmd == "collection search") {
+        if (const auto* rows = arr(r.data, "collections"))
+            for (const auto& c : rows->array())
+                add(lines, "  " + S(c, "slug") + "  " + S(c, "name") + "  — " + std::to_string(adata::integer(c, "mod_count")) + " mods, ~" +
+                               human(adata::integer(c, "total_size")) + " declared (real download is often larger: see `collection inspect`)", mem);
+    } else if (cmd == "collection install" || cmd == "collection status") {
+        add(lines, S(r.data, "name") + ": " + S(r.data, "status") + " — " + std::to_string(adata::integer(r.data, "installed")) + " installed, " +
+                       std::to_string(adata::integer(r.data, "skipped")) + " skipped, " + std::to_string(adata::integer(r.data, "failed")) + " failed", mem);
+        if (const auto* pend = arr(r.data, "pending"))
+            for (const auto& p : pend->array())
+                add(lines, "  pending [" + S(p, "kind") + "] " + S(p, "key") + "  " + S(p, "name") + (S(p, "url").empty() ? "" : "  " + S(p, "url")), mem);
     } else if (cmd == "collection readme") {
         add(lines, S(r.data, "markdown"), mem);
     } else if (cmd == "schema") {
