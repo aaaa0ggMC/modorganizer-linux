@@ -181,6 +181,40 @@ for t in dl['data']['topics']:
 r = subprocess.run([exe, 'docs', 'GUIDE.md'], text=True, capture_output=True)
 assert r.returncode == 0 and r.stdout.startswith('# mo-linux 操作指南'), r.stdout[:80]
 call('-j', 'docs', 'nope', code=2)
+# collection inspect 不需要实例；total_size = 清单文件大小之和；install 开始前有预检（note 事件 + data.preflight）
+with tempfile.TemporaryDirectory(prefix='mol-cli-col-', dir='/tmp') as tmp_c:
+    tc = Path(tmp_c)
+    man = tc / 'tiny.json'
+    man.write_text(json.dumps({'info': {'name': 'Tiny', 'author': 'me', 'domainName': 'skyrimspecialedition', 'gameVersions': ['1.6.1170']},
+        'mods': [{'name': 'A', 'version': '1', 'optional': False, 'source': {'type': 'nexus', 'modId': 1, 'fileId': 2, 'fileSize': 1000, 'tag': 'a'}},
+                 {'name': 'B', 'version': '1', 'optional': True, 'source': {'type': 'browse', 'url': 'http://x.invalid', 'fileSize': 500, 'tag': 'b'}}], 'modRules': []}))
+    env_c = dict(os.environ, HOME=str(tc / 'home'), XDG_CONFIG_HOME=str(tc / 'cfg'), NEXUS_API_KEY='')
+    env_c.pop('MOL_INSTANCE', None)
+    r = subprocess.run([exe, '-j', 'collection', 'inspect', str(man)], text=True, capture_output=True, env=env_c, cwd=str(tc))
+    assert r.returncode == 0, r.stderr
+    d = json.loads(r.stdout)['data']
+    assert (d['total_size'], d['optional_size'], d['has_instance'], d['mod_count']) == (1500, 500, False, 2), d
+    assert {x['type']: (x['count'], x['size']) for x in d['sources']} == {'nexus': (1, 1000), 'browse': (1, 500)}, d['sources']
+    assert [m['status'] for m in d['mods']] == ['new', 'new'] and [m['file_size'] for m in d['mods']] == [1000, 500]
+    checks += 1
+    ci = tc / 'inst'
+    call('-j', '-i', str(ci), 'instance', 'init', '--game-dir', str(tc), '--prefix', str(tc / 'pfx'))
+    ev = tc / 'ev.jsonl'
+    with ev.open('w') as stream:
+        r = subprocess.run([exe, '-j', '-i', str(ci), '--events', f'fd:{stream.fileno()}', 'collection', 'install', str(man)],
+                           text=True, capture_output=True, pass_fds=(stream.fileno(),), env=env_c)
+    assert r.returncode == 4, (r.returncode, r.stderr)
+    assert 'collection install: 2 mods' in r.stderr, r.stderr
+    rows = [json.loads(line) for line in ev.read_text().splitlines()]
+    assert rows[0] == {'event': 'start', 'op': 'collection install'} and rows[1]['event'] == 'note' and rows[1]['code'] == 'preflight', rows[:2]
+    pf = json.loads(r.stdout)['data']['preflight']
+    assert (pf['mods'], pf['download_size'], pf['remaining_size']) == (2, 1500, 1500) and pf['free_space'] > 0, pf
+    r = subprocess.run([exe, '-i', str(ci), 'collection', 'status', 'tiny'], text=True, capture_output=True, env=env_c)
+    assert r.returncode == 4 and 'pending [' in r.stdout, r.stdout
+    shared = tc / 'shared-dl'
+    data, _ = call('-j', '-q', '-i', str(ci), 'collection', 'install', str(man), '--downloads', str(shared), code=4, env=env_c)
+    assert shared.is_dir() and data['data']['preflight']['download_size'] == 1500
+    checks += 1
 # overview：一次取齐；与单独的 next/doctor 一致（上面的 with 块结束时临时目录已删除，这里自建实例）
 with tempfile.TemporaryDirectory(prefix='mol-cli-ov-', dir='/tmp') as tmp_ov:
     ovr = Path(tmp_ov)

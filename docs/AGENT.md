@@ -47,6 +47,8 @@ mo-linux never asks questions mid-run. Anything that needs a decision is recorde
 | `unsupported` | Binary patches or bundled sources | `collection resolve … --skip`, or supply an archive with `--archive` |
 | `skse` | The collection lists SKSE64 from skse.silverlock.org | `mo-linux -j skse install`, then re-run `collection install` |
 
+**Size and feasibility first**: `collection inspect SLUG` works without an instance. Its `total_size` is the real download (sum of the manifest's file sizes); the size shown by `collection search` / the Nexus page (`declared_total_size`) is often lower. Plan for about twice `total_size` of free disk (archives + extracted mods). `collection install` prints a preflight (stderr, `note` events, `data.preflight`) with warnings `disk_space` / `game_version` / `doctor` — stop and tell the user if any appear before a large download.
+
 **Before installing a collection, read its page description** (`collection readme SLUG`, or `description` in `collection inspect`). The manifest's `install_instructions` is often just "see the main page"; the real requirements — a specific game version (compare `game_versions` with the local `game_version`), a downgrade, an ENB, optional mods to pick, tools to run afterwards — are only on the page. Summarise them for the user and ask before doing anything they require outside mo-linux. The README is cached as `collections/<slug>/readme-<rev>.md`, so it is available offline.
 
 Then run the **same command again**. Finished mods are not redone; downloaded archives are found by size + md5.

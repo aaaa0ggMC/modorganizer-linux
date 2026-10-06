@@ -286,6 +286,12 @@ struct CollectionModRow {
     bool has_fomod_choices = false;
     bool has_patches = false;
     std::pmr::string status;  // 无状态时为 "new"
+    std::int64_t file_size = 0;  // 清单里的文件大小（字节）
+};
+struct CollectionSourceRow {
+    std::pmr::string type;   // nexus | direct | browse | manual | bundle …
+    std::int64_t count = 0;
+    std::int64_t size = 0;
 };
 struct CollectionInspectData {
     std::pmr::string name;
@@ -296,7 +302,11 @@ struct CollectionInspectData {
     std::pmr::vector<std::pmr::string> game_versions;
     std::pmr::string game_version;  // 本机游戏的版本（取不到为空）
     std::int64_t mod_count = 0;
-    std::int64_t total_size = 0;
+    std::int64_t total_size = 0;           // 真实下载量：清单里所有文件大小之和（含可选 mod）
+    std::int64_t optional_size = 0;        // 其中可选 mod 的部分（`--no-optional` 时不下）
+    std::int64_t declared_total_size = 0;  // Nexus 页面声明的大小（常常偏低，仅供参考）
+    std::pmr::vector<CollectionSourceRow> sources;  // 按来源类型统计
+    bool has_instance = false;             // false：没有实例，mods[].status 一律 "new"、game_version 为空
     std::int64_t plugin_count = 0;
     std::int64_t rule_count = 0;
     std::pmr::string install_instructions;
@@ -333,6 +343,12 @@ struct CollectionPendingRow {
     std::pmr::string archive;  // 已下载的压缩包（fomod_choices 时可直接 `fomod inspect`）；没有为空
     std::pmr::string decision;  // 已用 `collection resolve` 记下、等下次 install 生效的决定：skip|fomod_defaults|fomod_choices|archive；没有为空
 };
+struct CollectionPreflightData {  // collection install 开始前的预检（collection status 里全为 0）
+    std::int64_t mods = 0;            // 本次要装的 mod 数（不含跳过的、未选的可选 mod）
+    std::int64_t download_size = 0;   // 它们的文件总大小（= download 进度事件的 total）
+    std::int64_t remaining_size = 0;  // 其中还没在手的
+    std::int64_t free_space = -1;     // downloads/ 所在分区的可用字节（-1 = 取不到）
+};
 struct CollectionInstallData {
     std::pmr::string name;
     std::pmr::string slug;
@@ -346,6 +362,7 @@ struct CollectionInstallData {
     std::pmr::vector<CollectionOutcomeRow> mods;
     std::pmr::vector<CollectionPendingRow> pending;
     std::pmr::vector<std::pmr::string> notes;
+    CollectionPreflightData preflight;
 };
 struct CollectionResolveData {
     std::pmr::string key;

@@ -1,6 +1,8 @@
 // collection inspect/install/status/resolve —— Nexus Collections 导入（设计见 core/include/mol/collection.hpp）。
 // 退出码：install 未完成（有 pending/failed）→ 4，ok 仍为 true。
 // 混用约束：所有 #include 在 import 之前（详见 cli/cmd_common.hpp 文件头）。
+#include <sys/statvfs.h>
+
 #include <filesystem>
 #include <fstream>
 #include <optional>
@@ -8,6 +10,7 @@
 
 #include "mol/casefold.hpp"
 #include "mol/collection.hpp"
+#include "mol/doctor.hpp"
 #include "mol/http.hpp"
 #include "mol/instance.hpp"
 #include "mol/mod_install.hpp"
@@ -116,12 +119,21 @@ void save_readme(const std::string& dir, std::int64_t revision, const Readme& r,
     if (os) os << readme_markdown(name, revision, r);  // 缓存失败不影响命令本身
 }
 
-Loaded load_remote(Context& ctx, const mol::Instance& inst, const Ref& ref, std::int64_t revision) {
+// 没有实例时清单缓存在 ~/.cache/mo-linux/collections/<slug>（collection inspect 只想看看能不能装时用）
+std::string user_cache_dir(std::string_view slug) {
+    fs::path base;
+    if (const char* x = std::getenv("XDG_CACHE_HOME"); x && *x) base = fs::path(x) / "mo-linux";
+    else base = fs::path(std::getenv("HOME") ? std::getenv("HOME") : "/tmp") / ".cache/mo-linux";
+    return (base / "collections" / std::string(slug)).string();
+}
+
+Loaded load_remote(Context& ctx, const mol::Instance* inst, const Ref& ref, std::int64_t revision) {
+    const auto dir_of = [&](std::string_view slug) { return inst ? col::collection_dir(*inst, slug) : user_cache_dir(slug); };
     Loaded l;
     l.slug = ref.slug;
     if (!ref.local.empty()) {
         const fs::path p(ref.local);
-        l.dir = col::collection_dir(inst, ref.slug);
+        l.dir = dir_of(ref.slug);
         const std::string ext = std::string(mol::casefold(p.extension().string()));
         l.coll = col::parse_collection(ext == ".json" ? read_file(p) : unpack_manifest(ref.local, fs::path(l.dir) / "archive-local"));
         return l;
@@ -130,7 +142,7 @@ Loaded load_remote(Context& ctx, const mol::Instance& inst, const Ref& ref, std:
     const auto rev = client.collection_revision(ref.domain, ref.slug, revision, ctx.mem);
     l.revision = rev.revision_number;
     l.total_size = rev.total_size;
-    l.dir = col::collection_dir(inst, ref.slug);
+    l.dir = dir_of(ref.slug);
     const fs::path unpacked = fs::path(l.dir) / ("archive-" + std::to_string(rev.revision_number));
     const fs::path cached_json = unpacked / "collection.json";
     std::error_code ec;
@@ -190,32 +202,108 @@ std::string status_of(const col::State& st, const std::string& key) {
     return it == st.mods.end() || it->second.status.empty() ? "new" : it->second.status;
 }
 
+std::string human_size(std::uint64_t n) {
+    const char* u[] = {"B", "KB", "MB", "GB", "TB"};
+    double v = static_cast<double>(n);
+    int i = 0;
+    while (v >= 1024 && i < 4) { v /= 1024; ++i; }
+    char buf[32];
+    std::snprintf(buf, sizeof buf, i == 0 ? "%.0f %s" : "%.2f %s", v, u[i]);
+    return buf;
+}
+
+// collection install 开始前的预检：大小、剩余空间、游戏版本、doctor 里与环境有关的错误。只提示，不拦。
+struct Preflight {
+    std::size_t mods = 0;
+    std::uint64_t total = 0, remaining = 0;
+    std::int64_t free_space = -1;  // downloads/ 所在分区的可用字节（取不到 -1）
+    std::vector<std::pair<std::string, std::string>> notes;  // (code, message)
+};
+Preflight preflight(const mol::Instance& inst, const Loaded& l, const col::State& st, const col::InstallOptions& opt, const std::string& gv) {
+    Preflight p;
+    std::error_code ec;
+    for (const auto& m : l.coll.mods) {
+        const std::string key = m.key();
+        const auto ov = st.overrides.find(key);
+        if ((ov != st.overrides.end() && ov->second.skip) || (m.optional && !opt.include_optional)) continue;
+        ++p.mods;
+        const auto z = static_cast<std::uint64_t>(std::max<std::int64_t>(m.source.file_size, 0));
+        p.total += z;
+        const auto sit = st.mods.find(key);
+        const bool have = sit != st.mods.end() && ((sit->second.status == "installed" && !sit->second.mod_dir.empty() &&
+                                                    fs::is_directory(fs::path(std::string(inst.mods_dir)) / sit->second.mod_dir, ec)) ||
+                                                   (!sit->second.archive.empty() && fs::is_regular_file(sit->second.archive, ec)));
+        if (!have) p.remaining += z;
+    }
+    fs::path probe(std::string(inst.downloads_dir));
+    while (!probe.empty() && !fs::exists(probe, ec)) probe = probe.parent_path();
+    if (struct statvfs sv{}; !probe.empty() && ::statvfs(probe.c_str(), &sv) == 0)
+        p.free_space = static_cast<std::int64_t>(sv.f_bavail) * static_cast<std::int64_t>(sv.f_frsize);
+    // 压缩包 + 解出来的 mod 大致要两倍
+    if (p.free_space >= 0 && static_cast<std::uint64_t>(p.free_space) < p.remaining * 2)
+        p.notes.emplace_back("disk_space", "only " + human_size(static_cast<std::uint64_t>(p.free_space)) + " free for " + human_size(p.remaining) +
+                                               " of downloads (archives plus extracted mods need roughly twice that)");
+    if (!l.coll.info.game_versions.empty() && !gv.empty() &&
+        std::find(l.coll.info.game_versions.begin(), l.coll.info.game_versions.end(), gv) == l.coll.info.game_versions.end())
+        p.notes.emplace_back("game_version", "the collection targets game version " + l.coll.info.game_versions.front() + " but this game is " + gv +
+                                                 " (read `collection readme`: it may require a downgrade)");
+    for (const auto& c : mol::run_doctor(inst, gv))
+        if (c.level == "error" && (c.id.starts_with("game.") || c.id.starts_with("prefix") || c.id.starts_with("runner.")))
+            p.notes.emplace_back("doctor", std::string(c.message) + (c.hint.empty() ? "" : " (" + std::string(c.hint) + ")"));
+    return p;
+}
+
 }  // namespace
 
 Result run_collection_inspect(Context& ctx) {
     if (!ctx.args.ok()) return make_usage_error(ctx.args.error, ctx);
-    const auto inst = mol::load_instance(ctx.instance_dir, ctx.profile_override(), ctx.mem);
-    const Ref ref = parse_ref(ctx.args.positionals.front(), inst);
+    // 只想看看要求、多大、能不能装：没有实例也行（状态一律 "new"，清单缓存在 ~/.cache/mo-linux/collections）
+    std::optional<mol::Instance> inst;
+    try {
+        inst = mol::load_instance(ctx.instance_dir, ctx.profile_override(), ctx.mem);
+    } catch (const mol::Error& e) {
+        if (e.code != "instance_not_found") throw;
+    }
+    const Ref ref = inst ? parse_ref(ctx.args.positionals.front(), *inst) : parse_ref(ctx.args.positionals.front(), search_domain(ctx));
     std::int64_t revision = 0;
     if (ctx.args.has("--revision") && !parse_int(ctx.args.get("--revision", "", ctx.mem), revision))
         return make_usage_error("collection inspect: --revision needs a positive integer", ctx);
-    const Loaded l = load_remote(ctx, inst, ref, revision);
-    const auto st = col::load_state(inst, l.slug);
+    const Loaded l = load_remote(ctx, inst ? &*inst : nullptr, ref, revision);
+    const col::State st = inst ? col::load_state(*inst, l.slug) : col::State{};
 
     CollectionInspectData d{.name = P(l.coll.info.name, ctx.mem), .slug = P(l.slug, ctx.mem), .author = P(l.coll.info.author, ctx.mem),
                             .domain = P(l.coll.info.domain, ctx.mem), .revision = l.revision,
-                            .game_versions = std::pmr::vector<std::pmr::string>(ctx.mem), .game_version = P(game_info_string(ctx, inst, "version"), ctx.mem),
-                            .mod_count = static_cast<std::int64_t>(l.coll.mods.size()), .total_size = l.total_size,
+                            .game_versions = std::pmr::vector<std::pmr::string>(ctx.mem),
+                            .game_version = P(inst ? game_info_string(ctx, *inst, "version") : std::string(), ctx.mem),
+                            .mod_count = static_cast<std::int64_t>(l.coll.mods.size()),
                             .plugin_count = static_cast<std::int64_t>(l.coll.plugins.size()), .rule_count = static_cast<std::int64_t>(l.coll.rules.size()),
                             .install_instructions = P(l.coll.info.install_instructions, ctx.mem), .url = P(l.readme.url, ctx.mem),
                             .summary = P(l.readme.summary, ctx.mem), .description = P(l.readme.description, ctx.mem),
                             .changelog = P(l.readme.changelog, ctx.mem), .mods = std::pmr::vector<CollectionModRow>(ctx.mem)};
+    d.has_instance = inst.has_value();
+    d.declared_total_size = l.total_size;
+    d.sources = std::pmr::vector<CollectionSourceRow>(ctx.mem);
+    // 真实下载量 = 清单里各文件大小之和（Nexus 页面上的 totalSize 常常偏低）
+    for (const auto& m : l.coll.mods) {
+        const std::int64_t z = std::max<std::int64_t>(m.source.file_size, 0);
+        d.total_size += z;
+        if (m.optional) d.optional_size += z;
+        const std::string type = m.source.type.empty() ? std::string("unknown") : m.source.type;
+        auto it = std::find_if(d.sources.begin(), d.sources.end(), [&](const CollectionSourceRow& s) { return std::string_view(s.type) == type; });
+        if (it == d.sources.end()) {
+            d.sources.push_back(CollectionSourceRow{.type = P(type, ctx.mem)});
+            it = d.sources.end() - 1;
+        }
+        ++it->count;
+        it->size += z;
+    }
     for (const auto& v : l.coll.info.game_versions) d.game_versions.push_back(P(v, ctx.mem));
     for (const std::size_t i : col::install_order(l.coll)) {
         const auto& m = l.coll.mods[i];
         d.mods.push_back(CollectionModRow{.key = P(m.key(), ctx.mem), .name = P(m.name, ctx.mem), .version = P(m.version, ctx.mem), .optional = m.optional,
                                           .source_type = P(m.source.type, ctx.mem), .mod_id = m.source.mod_id, .file_id = m.source.file_id,
-                                          .has_fomod_choices = m.has_choices, .has_patches = m.has_patches, .status = P(status_of(st, m.key()), ctx.mem)});
+                                          .has_fomod_choices = m.has_choices, .has_patches = m.has_patches, .status = P(status_of(st, m.key()), ctx.mem),
+                                          .file_size = m.source.file_size});
     }
     Result r = ok(ctx);
     r.set_data(std::move(d));
@@ -273,7 +361,15 @@ Result run_collection_readme(Context& ctx) {
 
 Result run_collection_install(Context& ctx) {
     if (!ctx.args.ok()) return make_usage_error(ctx.args.error, ctx);
-    const auto inst = mol::load_instance(ctx.instance_dir, ctx.profile_override(), ctx.mem);
+    auto inst = mol::load_instance(ctx.instance_dir, ctx.profile_override(), ctx.mem);
+    if (ctx.args.has("--downloads")) {  // 共享的下载目录（别的实例/别的盘）：只影响这次从哪找、往哪下压缩包
+        const std::string dl(ctx.args.get("--downloads", "", ctx.mem));
+        if (dl.empty()) return make_usage_error("collection install: --downloads needs a directory", ctx);
+        std::error_code ec;
+        fs::create_directories(dl, ec);
+        if (!fs::is_directory(dl, ec)) return make_usage_error("collection install: --downloads is not a directory: " + dl, ctx);
+        inst.downloads_dir = mol::string(fs::absolute(dl, ec).lexically_normal().string(), ctx.mem);
+    }
     const Ref ref = parse_ref(ctx.args.positionals.front(), inst);
     std::int64_t revision = 0;
     if (ctx.args.has("--revision") && !parse_int(ctx.args.get("--revision", "", ctx.mem), revision))
@@ -282,7 +378,7 @@ Result run_collection_install(Context& ctx) {
     EventSink* sink = ctx.sink;
     if (sink != nullptr) sink->start("collection install");
     try {
-        const Loaded l = load_remote(ctx, inst, ref, revision);
+        const Loaded l = load_remote(ctx, &inst, ref, revision);
         col::State st = col::load_state(inst, l.slug);
         if (st.revision != 0 && l.revision != 0 && st.revision != l.revision)
             st.revision = l.revision;  // 版本升级：沿用已装好的 mod（按 mod tag 对应），其余照常处理
@@ -305,6 +401,20 @@ Result run_collection_install(Context& ctx) {
             if (sink != nullptr && total > 0) sink->progress(std::string(stage), done, total, item);
         };
         const std::string gv = game_info_string(ctx, inst, "version");
+        const Preflight pre = preflight(inst, l, st, opt, gv);
+        // 开始下载前就告诉人/GUI：stderr（-q 时不打）+ note 事件；结果里另有 data.preflight 与 warnings
+        if (!(ctx.globals && ctx.globals->quiet)) {
+            std::fprintf(stderr, "collection install: %zu mods, %s to download (%s already here), %s free in downloads/\n", pre.mods,
+                         human_size(pre.remaining).c_str(), human_size(pre.total - pre.remaining).c_str(),
+                         pre.free_space < 0 ? "?" : human_size(static_cast<std::uint64_t>(pre.free_space)).c_str());
+            for (const auto& [code, msg] : pre.notes) std::fprintf(stderr, "  warning [%s] %s\n", code.c_str(), msg.c_str());
+            std::fflush(stderr);
+        }
+        if (sink != nullptr) {
+            sink->note("collection install", "preflight", "mods=" + std::to_string(pre.mods) + " download=" + std::to_string(pre.total) + " remaining=" + std::to_string(pre.remaining) +
+                                                              " free=" + std::to_string(pre.free_space));
+            for (const auto& [code, msg] : pre.notes) sink->note("collection install", code, msg);
+        }
         const auto rep = col::install_collection(inst, client ? &*client : nullptr, l.coll, st, opt, gv);
 
         CollectionInstallData d{.name = P(l.coll.info.name, ctx.mem), .slug = P(l.slug, ctx.mem), .revision = l.revision,
@@ -320,6 +430,10 @@ Result run_collection_install(Context& ctx) {
         for (const auto& n : rep.notes) d.notes.push_back(P(n, ctx.mem));
         Result r = ok(ctx, rep.complete() ? 0 : 4);
         for (const auto& n : rep.notes) r.add_warning("collection_note", n, "");
+        for (const auto& [code, msg] : pre.notes)
+            if (code != "game_version") r.add_warning(code, msg, "");  // 版本不一致已在 collection_note 里
+        d.preflight = CollectionPreflightData{.mods = static_cast<std::int64_t>(pre.mods), .download_size = static_cast<std::int64_t>(pre.total),
+                                              .remaining_size = static_cast<std::int64_t>(pre.remaining), .free_space = pre.free_space};
         r.set_data(std::move(d));
         if (sink != nullptr) sink->done("collection install", rep.complete());
         return r;
