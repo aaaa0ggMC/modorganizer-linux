@@ -1,3 +1,6 @@
+#include <chrono>
+#include <unistd.h>
+#include <poll.h>
 #include <algorithm>
 
 #include "minitest.hpp"
@@ -77,4 +80,31 @@ TEST(spawn_wait_and_env) {
     LaunchSpec bad;
     bad.argv = {string("/nonexistent/binary")};
     CHECK_EQ(spawn_launch(bad, true), 127);
+}
+
+TEST(detached_children_do_not_keep_the_callers_pipes_open) {
+    // 调用方（GUI / Agent）用管道收 mo-linux 的输出：后台拉起的游戏不能继承管道，否则读端永远等不到 EOF
+    int fds[2];
+    CHECK(::pipe(fds) == 0);
+    const int saved_err = ::dup(STDERR_FILENO), saved_out = ::dup(STDOUT_FILENO);
+    ::dup2(fds[1], STDERR_FILENO);
+    ::dup2(fds[1], STDOUT_FILENO);
+    LaunchSpec spec;
+    spec.argv.emplace_back("sleep");
+    spec.argv.emplace_back("3");
+    spawn_launch(spec, false);
+    ::dup2(saved_err, STDERR_FILENO);
+    ::dup2(saved_out, STDOUT_FILENO);
+    ::close(saved_err);
+    ::close(saved_out);
+    ::close(fds[1]);
+    pollfd p{fds[0], POLLIN, 0};
+    const auto t0 = std::chrono::steady_clock::now();
+    const int r = ::poll(&p, 1, 2000);
+    const auto ms = std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::steady_clock::now() - t0).count();
+    char c;
+    CHECK(r == 1);
+    CHECK(::read(fds[0], &c, 1) == 0);  // EOF，而不是等 sleep 结束
+    CHECK(ms < 1500);
+    ::close(fds[0]);
 }

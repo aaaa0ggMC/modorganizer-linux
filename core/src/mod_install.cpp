@@ -280,6 +280,83 @@ bool mod_name_taken(const Instance& inst, std::string_view name_in, std::string_
     return false;
 }
 
+// FOMOD 配置缓存：~/.cache/mo-linux/fomod/<xxh64(文件名|大小|mtime)>.xml。固实 7z 里只取 fomod/ 也要解压整个固实块，
+// 大包要几十秒；安装时整包已经解开，顺手存一份，之后的 fomod inspect / collection verify 直接读。
+static fs::path fomod_cache_path(const fs::path& archive) {
+    std::error_code ec;
+    const auto size = fs::file_size(archive, ec);
+    const auto mtime = fs::last_write_time(archive, ec).time_since_epoch().count();
+    const std::string key = archive.filename().string() + "|" + std::to_string(size) + "|" + std::to_string(mtime);
+    char buf[17];
+    std::snprintf(buf, sizeof buf, "%016llx", static_cast<unsigned long long>(xxh64(key)));
+    const char* x = std::getenv("XDG_CACHE_HOME");
+    const char* home = std::getenv("HOME");
+    const fs::path base = (x && *x) ? fs::path(x) / "mo-linux" : fs::path(home ? home : "/tmp") / ".cache/mo-linux";
+    return base / "fomod" / (std::string(buf) + ".xml");
+}
+static void cache_fomod_config(const fs::path& archive, const std::string& cfg_path) {
+    std::error_code ec;
+    const fs::path dst = fomod_cache_path(archive);
+    fs::create_directories(dst.parent_path(), ec);
+    fs::copy_file(cfg_path, dst, fs::copy_options::overwrite_existing, ec);  // 缓存失败不影响安装
+}
+
+std::vector<std::string> list_archive(std::string_view archive) {
+    std::vector<std::string> argv;
+    if (which("7z")) argv = {"7z", "l", "-ba", "-slt", std::string(archive)};
+    else if (which("7zz")) argv = {"7zz", "l", "-ba", "-slt", std::string(archive)};
+    else if (which("bsdtar")) argv = {"bsdtar", "-tf", std::string(archive)};
+    else throw Error("io_error", "no archive tool found (install p7zip/7zip or libarchive's bsdtar)");
+    int pipefd[2];
+    if (::pipe(pipefd) != 0) throw Error("io_error", "pipe failed");
+    std::vector<char*> av;
+    for (auto& a : argv) av.push_back(a.data());
+    av.push_back(nullptr);
+    posix_spawn_file_actions_t fa;
+    posix_spawn_file_actions_init(&fa);
+    posix_spawn_file_actions_adddup2(&fa, pipefd[1], 1);
+    posix_spawn_file_actions_addclose(&fa, pipefd[0]);
+    posix_spawn_file_actions_addopen(&fa, 2, "/dev/null", O_WRONLY, 0);
+    pid_t pid = 0;
+    const int rc = ::posix_spawnp(&pid, av[0], &fa, nullptr, av.data(), environ);
+    posix_spawn_file_actions_destroy(&fa);
+    ::close(pipefd[1]);
+    std::string out;
+    if (rc == 0) {
+        char buf[65536];
+        for (ssize_t n; (n = ::read(pipefd[0], buf, sizeof buf)) > 0 || (n < 0 && errno == EINTR);)
+            if (n > 0) out.append(buf, static_cast<std::size_t>(n));
+        int st = 0;
+        while (::waitpid(pid, &st, 0) < 0 && errno == EINTR) {}
+    }
+    ::close(pipefd[0]);
+    if (rc != 0) throw Error("io_error", "cannot run the archive tool", std::string(archive));
+    std::vector<std::string> names;
+    std::vector<bool> is_dir;  // 与 names 一一对应（-slt 下目录条目会给 Folder = + 和/或 Attributes = D…）
+    const bool slt = argv[0] != "bsdtar";
+    std::size_t i = 0;
+    while (i < out.size()) {
+        std::size_t j = out.find('\n', i);
+        if (j == std::string::npos) j = out.size();
+        std::string line = out.substr(i, j - i);
+        i = j + 1;
+        if (!line.empty() && line.back() == '\r') line.pop_back();
+        if (slt) {
+            if (line.rfind("Path = ", 0) == 0) { names.push_back(line.substr(7)); is_dir.push_back(false); }
+            else if (!is_dir.empty() && (line == "Folder = +" || line.rfind("Attributes = D", 0) == 0)) is_dir.back() = true;
+        } else if (!line.empty() && line.back() != '/') {
+            names.push_back(line);
+        }
+    }
+    if (slt) {
+        std::vector<std::string> files;
+        for (std::size_t k = 0; k < names.size(); ++k) if (!is_dir[k]) files.push_back(std::move(names[k]));
+        names.swap(files);
+    }
+    for (auto& n : names) std::replace(n.begin(), n.end(), '\\', '/');
+    return names;
+}
+
 void extract_archive(std::string_view archive, std::string_view dest) { extract(fs::path(std::string(archive)), fs::path(std::string(dest))); }
 
 void reorder_mods(const Instance& inst, std::span<const string> names, std::string_view profile) {
@@ -364,6 +441,17 @@ InstallResult install_archive(const Instance& inst, std::string_view archive_s, 
             move_children_up(hop, tmp);
             fs::remove(hop, ec);
         }
+        // 1.4) FOMOD 藏在唯一的顶层目录里（Data/FOMOD/…：Data 不当包装剥，所以上面没剥掉）→ 那一层才是模块根（与 MO2 一致）
+        if (opt.fomod != FomodMode::Raw && fomod::find_module_config(tmp.string()).empty()) {
+            auto kids = children(tmp);
+            if (kids.size() == 1 && fs::is_directory(kids[0], ec) && !fomod::find_module_config(kids[0].string()).empty()) {
+                const fs::path hop = tmp / ".mol-hop";
+                fs::rename(kids[0], hop, ec);
+                if (ec) throw Error("io_error", "rename failed: " + ec.message(), kids[0].string());
+                move_children_up(hop, tmp);
+                fs::remove(hop, ec);
+            }
+        }
         // 1.5) 复刻（集合清单的 hashes）：取代 FOMOD
         if (opt.fomod == FomodMode::Replicate) {
             const fs::path stage = mods / (".mol-stage-" + std::to_string(::getpid()));
@@ -390,6 +478,7 @@ InstallResult install_archive(const Instance& inst, std::string_view archive_s, 
                 throw Error("fomod_choices_required",
                             "this archive has a FOMOD installer; run `fomod inspect` and pass --fomod CHOICES.json, or --fomod-defaults, or --no-fomod",
                             archive.string());
+            cache_fomod_config(archive, cfgp);
             const fomod::Config cfg = fomod::load_config(cfgp);
             fomod::Env env = opt.fomod_env;
             if (!env.file_state) env.file_state = make_file_state(inst, profile, mem);
@@ -468,6 +557,9 @@ std::optional<fomod::Config> read_archive_fomod(const Instance& inst, std::strin
     const fs::path archive{std::string(archive_s)};
     std::error_code ec;
     if (!fs::is_regular_file(archive, ec)) throw Error("invalid_argument", "archive not found", archive.string());
+    if (const fs::path cached = fomod_cache_path(archive); fs::is_regular_file(cached, ec)) {
+        try { return fomod::load_config(cached.string()); } catch (const Error&) { fs::remove(cached, ec); }  // 坏缓存：删掉重来
+    }
     const fs::path tmp = fs::path(std::string(inst.downloads_dir)) / (".mol-fomod-" + std::to_string(::getpid()));
     fs::remove_all(tmp, ec);
     fs::create_directories(tmp, ec);
@@ -491,7 +583,10 @@ std::optional<fomod::Config> read_archive_fomod(const Instance& inst, std::strin
                 if (fs::is_directory(c, ec)) { cfgp = fomod::find_module_config(c.string()); if (!cfgp.empty()) break; }
         }
         std::optional<fomod::Config> out;
-        if (!cfgp.empty()) out = fomod::load_config(cfgp);
+        if (!cfgp.empty()) {
+            out = fomod::load_config(cfgp);
+            cache_fomod_config(archive, cfgp);
+        }
         fs::remove_all(tmp, ec);
         return out;
     } catch (...) {

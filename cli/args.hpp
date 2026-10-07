@@ -68,6 +68,14 @@ constexpr OptionSpec kOptRun[] = {
     {"args", "", "--args", "Arguments for the executable (one string, Windows-style quoting)", true},
     {"no-cow", "", "--no-cow", "Do not inject copy-on-write: writes through farm links change the original files", false},
     {"force", "", "--force", "Launch even if the pre-launch check finds a problem that is known to crash the game", false},
+    {"diagnose", "", "--diagnose", "Run with Proton logging, wait for the game to exit, then explain how it ended (exception + module, failed SKSE plugins, crash log)", false},
+    {"no-start-steam", "", "--no-start-steam", "Do not start the Steam client when it is not running (fail instead)", false},
+};
+constexpr OptionSpec kOptCollectionVerify[] = {
+    {"fix", "", "--fix", "Mark the FOMOD mods that do not match for reinstall (then run `collection install`)", false},
+};
+constexpr OptionSpec kOptModsFind[] = {
+    {"archives", "", "--archives", "Also list the archives in downloads/ that contain the file (slow: reads every archive's index)", false},
 };
 constexpr OptionSpec kOptTerminate[] = {
     {"dry-run", "", "--dry-run", "Only list the processes that would be ended", false},

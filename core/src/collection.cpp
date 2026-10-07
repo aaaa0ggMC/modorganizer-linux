@@ -768,13 +768,159 @@ Report install_collection(const Instance& inst, const NexusClient* client, const
     // 4) 优先级：按安装顺序放到 modlist 最高处
     if (!final_names.empty()) reorder_mods(inst, final_names, profile);
     // 5) 插件列表
-    if (c.has_plugins) rep.plugins_applied = apply_plugin_spec(inst, c, profile);
+    if (c.has_plugins) {
+        std::vector<std::string> missing;
+        rep.plugins_applied = apply_plugin_spec(inst, c, profile, {}, &missing);
+        if (!missing.empty()) {
+            std::string list;
+            for (std::size_t i = 0; i < missing.size() && i < 8; ++i) list += (i ? ", " : "") + missing[i];
+            if (missing.size() > 8) list += ", …";
+            rep.notes.push_back(std::to_string(missing.size()) + " plugin(s) the collection enables are not installed (" + list +
+                                "): a mod was installed incompletely; `collection verify` finds which, `mods find NAME --archives` where the file is");
+        }
+    }
     state.name = c.info.name;
     save_state(inst, state);
     return rep;
 }
 
-std::size_t apply_plugin_spec(const Instance& inst, const Collection& c, std::string_view profile, std::span<const string> forced) {
+namespace {
+std::string norm_rel(std::string p) {
+    std::replace(p.begin(), p.end(), '\\', '/');
+    std::string out;  // 去掉空段与 "." 段
+    for (std::size_t i = 0; i <= p.size();) {
+        std::size_t j = p.find('/', i);
+        if (j == std::string::npos) j = p.size();
+        const std::string seg = p.substr(i, j - i);
+        if (!seg.empty() && seg != ".") out += (out.empty() ? "" : "/") + seg;
+        i = j + 1;
+    }
+    return lower(out);
+}
+std::set<std::string> files_under(const fs::path& dir) {
+    std::set<std::string> out;
+    std::error_code ec;
+    for (fs::recursive_directory_iterator it(dir, ec), end; !ec && it != end; it.increment(ec)) {
+        if (!it->is_regular_file(ec)) continue;
+        const std::string rel = norm_rel(it->path().lexically_relative(dir).generic_string());
+        if (rel != "meta.ini") out.insert(rel);
+    }
+    return out;
+}
+}  // namespace
+
+VerifyReport verify_collection(const Instance& inst, const Collection& c, const State& state, std::string_view profile_in,
+                               const std::function<void(std::size_t, std::size_t, std::string_view)>& progress) {
+    VerifyReport rep;
+    const std::string profile = profile_in.empty() ? std::string(inst.cfg.profile) : std::string(profile_in);
+    std::set<std::string> collection_plugins, collection_plugins_all;
+    for (const auto& p : c.plugins) {
+        if (p.enabled) collection_plugins.insert(lower(p.name));
+        collection_plugins_all.insert(lower(p.name));
+    }
+    std::function<std::string(std::string_view)> base_state;
+    fomod::Env env;
+    env.game_version = "0.0.0.0";
+    env.file_state = [&](std::string_view f) {
+        if (f.find_first_of("/\\") == std::string_view::npos && collection_plugins.count(lower(f))) return std::string("Active");
+        if (!base_state) base_state = fomod_file_state(inst, profile);
+        return base_state(f);
+    };
+    std::size_t done = 0;
+    for (const auto& m : c.mods) {
+        ++done;
+        const std::string key = m.key();
+        const auto sit = state.mods.find(key);
+        if (sit == state.mods.end() || sit->second.status != "installed" || sit->second.mod_dir.empty()) continue;
+        const Override ov = state.overrides.count(key) ? state.overrides.at(key) : Override{};
+        const bool replicate = !m.hashes.empty() && !ov.has_choices && !m.has_choices;
+        const fomod::Choices* choices = ov.has_choices ? &ov.choices : m.has_choices ? &m.choices : nullptr;
+        if (!replicate && !choices) continue;  // 没有 FOMOD 选择也没有 hashes：没什么可对照的
+        if (progress) progress(done, c.mods.size(), m.name);
+        const fs::path dir = fs::path(std::string(inst.mods_dir)) / sit->second.mod_dir;
+        std::error_code ec;
+        if (!fs::is_directory(dir, ec)) { ++rep.skipped; continue; }
+        const std::set<std::string> actual = files_under(dir);
+        std::set<std::string> expected;
+        VerifyItem item{key, m.name, sit->second.mod_dir, replicate ? "replicate" : "fomod", {}, {}};
+        if (replicate) {
+            for (const auto& [p, h] : m.hashes)
+                if (norm_rel(p) != "meta.ini") expected.insert(norm_rel(p));  // Vortex 自己的 meta.ini 也会被记进 hashes
+            ++rep.checked;
+            for (const auto& e : expected) if (!actual.count(e)) item.missing.push_back(e);  // 复刻只看「该有的在不在」
+        } else {
+            const std::string archive = sit->second.archive;
+            if (archive.empty() || !fs::is_regular_file(archive, ec)) { ++rep.skipped; continue; }
+            std::optional<fomod::Config> cfg;
+            std::vector<std::string> names;
+            try {
+                cfg = read_archive_fomod(inst, archive);
+                if (cfg) names = list_archive(archive);
+            } catch (const Error&) { ++rep.skipped; continue; }
+            if (!cfg) { ++rep.skipped; continue; }
+            // FOMOD 的源路径相对「模块根」= ModuleConfig.xml 所在 fomod/ 目录的上一级
+            std::string root;
+            for (const auto& n : names) {
+                const std::string l = norm_rel(n);
+                if (l.ends_with("fomod/moduleconfig.xml")) { root = l.substr(0, l.size() - std::string("fomod/moduleconfig.xml").size()); break; }
+            }
+            std::vector<std::string> rels;  // 相对模块根（小写）
+            for (const auto& n : names) {
+                const std::string l = norm_rel(n);
+                if (l.starts_with(root)) rels.push_back(l.substr(root.size()));
+            }
+            std::vector<std::string> notes;
+            fomod::Resolved r;
+            try { r = fomod::resolve(*cfg, *choices, false, env, &notes); } catch (const Error&) { ++rep.skipped; continue; }
+            for (const auto& f : r.files) {
+                const std::string src = norm_rel(f.source);
+                std::string dst = f.destination;
+                const bool dir_like = !dst.empty() && (dst.back() == '/' || dst.back() == '\\');
+                dst = norm_rel(dst);
+                if (f.folder) {
+                    for (const auto& rel : rels)
+                        if (rel.size() > src.size() && rel.starts_with(src + "/"))
+                            expected.insert(dst.empty() ? rel.substr(src.size() + 1) : dst + "/" + rel.substr(src.size() + 1));
+                } else {
+                    const auto slash = src.find_last_of('/');
+                    const std::string base = slash == std::string::npos ? src : src.substr(slash + 1);
+                    expected.insert(dst.empty() ? base : dir_like ? dst + "/" + base : dst);
+                }
+            }
+            // 安装时整体只有一个 Data/ 会被剥掉
+            if (!expected.empty() && std::all_of(expected.begin(), expected.end(), [](const std::string& e) { return e.starts_with("data/"); })) {
+                std::set<std::string> stripped;
+                for (const auto& e : expected) stripped.insert(e.substr(5));
+                expected.swap(stripped);
+            }
+            expected.erase("meta.ini");  // 我们自己的 meta.ini 会覆盖它
+            // 顶层插件：只有清单插件列表里有的才算「应有」——FOMOD 的条件按今天的环境求值，可能比策展人当时多选；
+            // 列表里没有的说明策展人那里没有这个文件
+            std::erase_if(expected, [&](const std::string& e) {
+                if (e.find('/') != std::string::npos) return false;
+                const bool plugin = e.ends_with(".esp") || e.ends_with(".esm") || e.ends_with(".esl");
+                return plugin && !actual.count(e) && !collection_plugins_all.count(e);
+            });
+            ++rep.checked;
+            for (const auto& e : expected) if (!actual.count(e)) item.missing.push_back(e);
+            for (const auto& a : actual) if (!expected.count(a)) item.extra.push_back(a);
+        }
+        if (!item.missing.empty() || !item.extra.empty()) rep.mismatched.push_back(std::move(item));
+    }
+    // 清单启用、磁盘上没有的插件（不改任何文件：只读插件列表）
+    {
+        const PluginList list = load_plugins(inst, {}, profile);
+        std::set<std::string> have;
+        for (const auto& r : list.rows) have.insert(lower(r.name));
+        std::set<std::string> seen;
+        for (const auto& p : c.plugins)
+            if (p.enabled && seen.insert(lower(p.name)).second && !have.count(lower(p.name))) rep.missing_plugins.push_back(p.name);
+    }
+    return rep;
+}
+
+std::size_t apply_plugin_spec(const Instance& inst, const Collection& c, std::string_view profile, std::span<const string> forced,
+                              std::vector<std::string>* missing) {
     if (!c.has_plugins || c.plugins.empty()) return 0;
     PluginList list = load_plugins(inst, forced, profile);
     std::vector<std::size_t> slots;
@@ -784,6 +930,7 @@ std::size_t apply_plugin_spec(const Instance& inst, const Collection& c, std::st
     for (const auto& spec : c.plugins) {
         const auto want = casefold(spec.name);
         if (!seen.insert(std::string(want)).second) continue;
+        bool found = false;
         for (std::size_t i = 0; i < list.rows.size(); ++i) {
             if (casefold(list.rows[i].name) != want) continue;
             if (!list.rows[i].forced) {
@@ -791,8 +938,10 @@ std::size_t apply_plugin_spec(const Instance& inst, const Collection& c, std::st
                 wanted.push_back(std::string(list.rows[i].name));
             }
             ++applied;
+            found = true;
             break;
         }
+        if (!found && spec.enabled && missing) missing->push_back(spec.name);
     }
     // 在这些插件原有的槽位里，按清单顺序重新排列它们
     for (std::size_t i = 0; i < list.rows.size(); ++i)

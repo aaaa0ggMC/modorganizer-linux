@@ -2,6 +2,9 @@
 
 #include <filesystem>
 #include <fstream>
+#include <algorithm>
+#include <chrono>
+#include <cstdlib>
 #include <map>
 
 #include "minitest.hpp"
@@ -170,4 +173,71 @@ TEST(mod_layouts_broken_by_old_installs_are_found) {
     CHECK_EQ(got["Preset"], std::string("enb_in_data;"));
     CHECK(got.count("Fine") == 0);
     CHECK(got.count("Root") == 0);
+}
+
+TEST(start_steam_waits_for_a_fresh_login_line) {
+    Tmp t;
+    // 假的 steam：启动后过一会儿往 connection_log 追加登录完成行，然后变成一个名为 steam 的常驻进程
+    const fs::path bin = t.dir / "bin";
+    const fs::path root = t.dir / "steamroot";
+    fs::create_directories(bin);
+    put(root / "logs/connection_log.txt", "[2026-01-01 00:00:00] [Logged On, 4, 7] old line from a previous session\n");
+    fs::create_directories(bin / "d");
+    fs::copy_file("/bin/sleep", bin / "d/steam");  // 进程的 exe 名必须是 steam
+    put(bin / "steam", "#!/bin/sh\n(sleep 1; echo '[2026-01-01 00:00:01] [Logged On, 4, 7] processing complete' >> '" + (root / "logs/connection_log.txt").string() +
+                           "') &\nexec '" + (bin / "d/steam").string() + "' 20\n");
+    fs::permissions(bin / "steam", fs::perms::owner_all);
+    const std::string old_path = std::getenv("PATH") ? std::getenv("PATH") : "";
+    ::setenv("PATH", (bin.string() + ":" + old_path).c_str(), 1);
+    const auto t0 = std::chrono::steady_clock::now();
+    const bool ok = h::start_steam_and_wait(root.string(), 15000);
+    const auto secs = std::chrono::duration_cast<std::chrono::seconds>(std::chrono::steady_clock::now() - t0).count();
+    ::setenv("PATH", old_path.c_str(), 1);
+    CHECK(ok);
+    CHECK(secs >= 1);  // 旧的登录行不算：等到新追加的那一行
+    std::system(("pkill -f '" + (bin / "d/steam").string() + "' 2>/dev/null").c_str());
+}
+
+TEST(crashlogger_1_24_log_from_the_contentcatalog_crash_is_summarised) {
+    // 真实日志（2026-10-07 故意复现：1.6.1170 + 被 1.7 写坏的 ContentCatalog.txt；去掉了硬件信息与 MODULES 之后的部分）
+    std::ifstream in(std::string(MOL_TEST_DATA_DIR) + "/crashlogger_1_24_contentcatalog.log", std::ios::binary);
+    const std::string text((std::istreambuf_iterator<char>(in)), std::istreambuf_iterator<char>());
+    CHECK(!text.empty());
+    const auto c = h::parse_crash_log(text);
+    CHECK(c.exception.find("C++ Exception") != std::string::npos);
+    CHECK_EQ(c.cxx_type, std::string("std::invalid_argument*"));
+    CHECK_EQ(c.cxx_info, std::string("invalid stoull argument"));
+    CHECK_EQ(c.first_own_frame, std::string("SkyrimSE.exe+1235AE9"));
+    CHECK(std::find(c.modules.begin(), c.modules.end(), "MSVCP140.dll") != c.modules.end());
+    CHECK(std::find(c.modules.begin(), c.modules.end(), "EngineFixes.dll") == c.modules.end());  // [S] 帧不算
+    CHECK(std::find(c.files.begin(), c.files.end(), "ContentCatalog.txt") != c.files.end());
+    CHECK(std::find(c.files.begin(), c.files.end(), "atalog.txt") == c.files.end());  // 栈上的字符串残片
+    CHECK(std::find(c.plugins.begin(), c.plugins.end(), "Constellations - Hard Mode.esp") != c.plugins.end());
+    CHECK(c.hint.find("fix content-catalog") != std::string::npos);
+}
+
+TEST(proton_log_names_the_throwing_module_and_the_gpu) {
+    // 首次排查时的形状：MSVCP140 加载在 0x6FFFFD900000，C++ 异常的 info[3] 指向它；DXVK 选了核显
+    const std::string log =
+        "012c:trace:loaddll:build_module Loaded L\"C:\\\\windows\\\\system32\\\\MSVCP140.dll\" at 00006FFFFD900000: native\n"
+        "012c:trace:loaddll:build_module Loaded L\"C:\\\\windows\\\\system32\\\\kernelbase.dll\" at 00006FFFFFC10000: builtin\n"
+        "012c:trace:seh:dispatch_exception code=406d1388 flags=0 addr=00006FFFFFC1CF07 ip=6fffffc1cf07\n"
+        "info:  NVIDIA GeForce RTX 5060 Laptop GPU:\n"
+        "info:    Driver : NVIDIA 615.71.9\n"
+        "info:  AMD Radeon 610M (RADV RAPHAEL_MENDOCINO):\n"
+        "info:    Driver : radv 26.2.3\n"
+        "info:  Device properties:\n"
+        "info:    Device : AMD Radeon 610M (RADV RAPHAEL_MENDOCINO)\n"
+        "0294:trace:seh:dispatch_exception code=e06d7363 flags=1 addr=00006FFFFFC1CF07 ip=6fffffc1cf07\n"
+        "0294:trace:seh:dispatch_exception  info[0]=0000000019930520\n"
+        "0294:trace:seh:dispatch_exception  info[3]=00006ffffd900000\n"
+        "013c:trace:seh:dispatch_exception code=6ba flags=0 addr=00006FFFFFC1CF07 ip=6fffffc1cf07\n";
+    const auto d = h::parse_proton_log(log);
+    CHECK(d.last.has_value());
+    CHECK_EQ(d.last->code, std::string("e06d7363"));
+    CHECK_EQ(d.last->module, std::string("MSVCP140.dll"));
+    CHECK_EQ(d.codes.size(), std::size_t{1});  // 线程命名、RPC 噪音不算
+    CHECK_EQ(d.gpus.size(), std::size_t{2});
+    CHECK_EQ(d.gpu_used, std::string("AMD Radeon 610M (RADV RAPHAEL_MENDOCINO)"));
+    CHECK_EQ(h::discrete_gpu_unused(d), std::string("NVIDIA GeForce RTX 5060 Laptop GPU"));
 }

@@ -77,6 +77,9 @@ std::string sanitize_mod_name(std::string_view name);
 // mods/ 下或 modlist 里是否已有该名字（按 sanitize_mod_name 后、大小写不敏感比较）。
 bool mod_name_taken(const Instance& inst, std::string_view name, std::string_view profile = {});
 
+// 压缩包里的文件路径（'/' 分隔；不含目录条目）。用外部 7z/7zz/bsdtar；不解压。失败 → Error{io_error}。
+std::vector<std::string> list_archive(std::string_view archive);
+
 // 把任意压缩包解到 dest（须存在）；用外部 7z/7zz/bsdtar；不做安全校验（调用方自行 validate）。失败 → Error{io_error}。
 void extract_archive(std::string_view archive, std::string_view dest);
 

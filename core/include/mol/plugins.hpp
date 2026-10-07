@@ -66,8 +66,17 @@ vector<string> default_forced_plugins(mr* mem = default_mr());
 
 // forced：强制插件名（顺序即它们在列表最前面的顺序）；空 → default_forced_plugins。
 PluginList load_plugins(const Instance& inst, std::span<const string> forced = {}, std::string_view profile = {}, mr* mem = default_mr());
-// 写 profile 的 plugins.txt 与 loadorder.txt（原子）。
+// 写 profile 的 plugins.txt 与 loadorder.txt（原子），并各留一份 <名字>.mol-last-good（mo-linux 最后一次写的内容）。
 void save_plugins(const Instance& inst, const PluginList& list, std::string_view profile = {});
+
+// 游戏不管 plugins.txt 怎么写都会加载的插件（本体/DLC、_ResourcePack.esl、游戏目录 Skyrim.ccc 里的 CC）：
+// 游戏自己重写 plugins.txt 时会省略它们，所以比较时要排除。
+vector<string> implicit_plugins(const Instance& inst, mr* mem = default_mr());
+// 在 .mol-last-good 里启用、现在 plugins.txt 里却没有启用的插件（不含 implicit_plugins）。
+// 非空 = 别人（通常是游戏读到了别的列表后重写）把插件弄丢了。没有副本时返回空。
+vector<string> plugins_lost_since_snapshot(const Instance& inst, std::string_view profile = {}, mr* mem = default_mr());
+// 用 .mol-last-good 覆盖 plugins.txt / loadorder.txt（原子替换）。没有副本返回 false。
+bool restore_plugins_snapshot(const Instance& inst, std::string_view profile = {});
 
 // 修改（都会先 normalize，返回是否有变化）。名字大小写不敏感，找不到 → Error{mod_not_found}（沿用该码表示"没有这个对象"）。
 // 禁用强制插件 → Error{invalid_argument}。

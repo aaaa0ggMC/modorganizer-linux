@@ -1,5 +1,7 @@
 #include "mol/runner.hpp"
 
+#include <fcntl.h>
+#include <sys/syscall.h>
 #include <sys/wait.h>
 #include <unistd.h>
 
@@ -177,7 +179,16 @@ int spawn_launch(const LaunchSpec& spec, bool wait) {
     if (pid == 0) {
         if (!wait) ::setsid();  // 脱离控制终端，随 CLI 退出而继续运行
         if (!spec.cwd.empty() && ::chdir(spec.cwd.c_str()) != 0) ::_exit(126);
-        ::dup2(STDERR_FILENO, STDOUT_FILENO);  // 游戏/工具的输出不能混进 mo-linux 的 stdout（JSON 信封）
+        if (!spec.log_file.empty() || !wait) {
+            // 后台进程（以及显式给了日志文件时）不持有调用方的任何一端管道
+            const int out = spec.log_file.empty() ? ::open("/dev/null", O_WRONLY) : ::open(spec.log_file.c_str(), O_WRONLY | O_CREAT | O_APPEND | O_CLOEXEC, 0644);
+            const int in = ::open("/dev/null", O_RDONLY);
+            if (out >= 0) { ::dup2(out, STDOUT_FILENO); ::dup2(out, STDERR_FILENO); if (out > 2) ::close(out); }
+            if (in >= 0) { ::dup2(in, STDIN_FILENO); if (in > 2) ::close(in); }
+            if (!wait) ::syscall(SYS_close_range, 3u, ~0u, 0u);  // 其它继承来的描述符（--events 的 fd、调用方的管道……）也不带走
+        } else {
+            ::dup2(STDERR_FILENO, STDOUT_FILENO);  // 游戏/工具的输出不能混进 mo-linux 的 stdout（JSON 信封）
+        }
         for (const auto& [k, v] : spec.env) ::setenv(k.c_str(), v.c_str(), 1);
         std::vector<char*> av;
         for (const auto& a : spec.argv) av.push_back(const_cast<char*>(a.c_str()));

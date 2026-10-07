@@ -1,5 +1,6 @@
 #include <unistd.h>
 
+#include <algorithm>
 #include <cstdlib>
 #include <functional>
 #include <filesystem>
@@ -378,4 +379,81 @@ TEST(backslash_paths_from_windows_zips_become_directories) {
     CHECK(zip_dir(t.dir / "b", t.dir / "b.zip"));
     CHECK_EQ(code_of([&] { install_archive(inst, (t.dir / "b.zip").string(), "Evil"); }), std::string("invalid_argument"));
     CHECK(!fs::exists(t.dir / "inst/evil.dll"));
+}
+
+TEST(list_archive_gives_files_not_folders) {
+    if (!have_zip_tool()) return;
+    Tmp t;
+    put(t.dir / "a/Meshes/FaceGeom/3DNPC.esp/00001.nif", "N");  // 名字像插件的目录（facegen 的写法）
+    put(t.dir / "a/3DNPC.esp", "P");
+    CHECK(zip_dir(t.dir / "a", t.dir / "a.zip"));
+    const auto names = list_archive((t.dir / "a.zip").string());
+    CHECK(std::find(names.begin(), names.end(), "3DNPC.esp") != names.end());
+    CHECK(std::find(names.begin(), names.end(), "Meshes/FaceGeom/3DNPC.esp/00001.nif") != names.end());
+    CHECK(std::find(names.begin(), names.end(), "Meshes/FaceGeom/3DNPC.esp") == names.end());
+}
+
+TEST(list_archive_drops_7z_directory_entries_too) {
+    if (std::system("command -v 7z >/dev/null 2>&1") != 0) return;
+    Tmp t;
+    put(t.dir / "a/meshes/dlc02/x.nif", "N");
+    const std::string cmd = "cd '" + (t.dir / "a").string() + "' && 7z a -bd '" + (t.dir / "a.7z").string() + "' . >/dev/null 2>&1";
+    CHECK(std::system(cmd.c_str()) == 0);
+    const auto names = list_archive((t.dir / "a.7z").string());
+    CHECK_EQ(names.size(), std::size_t{1});
+    if (!names.empty()) CHECK_EQ(names[0], std::string("meshes/dlc02/x.nif"));
+}
+
+TEST(fomod_configs_are_cached_per_archive) {
+    if (!have_zip_tool()) return;
+    Tmp t;
+    const Instance inst = make(t);
+    fs::create_directories(t.dir / "inst/downloads");
+    const std::string old_cache = std::getenv("XDG_CACHE_HOME") ? std::getenv("XDG_CACHE_HOME") : "";
+    ::setenv("XDG_CACHE_HOME", (t.dir / "cache").c_str(), 1);
+    fs::create_directories(t.dir / "a/fomod");
+    std::ofstream(t.dir / "a/fomod/ModuleConfig.xml") << R"(<?xml version="1.0"?><config><moduleName>Original</moduleName></config>)";
+    put(t.dir / "a/x.esp", "X");
+    CHECK(zip_dir(t.dir / "a", t.dir / "a.zip"));
+    const auto c1 = read_archive_fomod(inst, (t.dir / "a.zip").string());
+    CHECK(c1.has_value());
+    CHECK_EQ(c1->module_name, std::string("Original"));
+    // 缓存命中：改缓存里的内容，第二次读到的是缓存
+    fs::path cached;
+    for (const auto& e : fs::recursive_directory_iterator(t.dir / "cache")) if (e.path().extension() == ".xml") cached = e.path();
+    CHECK(!cached.empty());
+    std::ofstream(cached, std::ios::trunc) << R"(<?xml version="1.0"?><config><moduleName>FromCache</moduleName></config>)";
+    const auto c2 = read_archive_fomod(inst, (t.dir / "a.zip").string());
+    CHECK(c2.has_value());
+    CHECK_EQ(c2->module_name, std::string("FromCache"));
+    // 坏缓存：删掉，回到压缩包
+    std::ofstream(cached, std::ios::trunc) << "not xml at all";
+    const auto c3 = read_archive_fomod(inst, (t.dir / "a.zip").string());
+    CHECK(c3.has_value());
+    CHECK_EQ(c3->module_name, std::string("Original"));
+    if (old_cache.empty()) ::unsetenv("XDG_CACHE_HOME"); else ::setenv("XDG_CACHE_HOME", old_cache.c_str(), 1);
+}
+
+TEST(fomod_inside_the_data_folder_is_still_run) {
+    if (!have_zip_tool()) return;
+    Tmp t;
+    const Instance inst = make(t);
+    // 真实例子：Forgotten Retex Project 6.0——Data/FOMOD/ModuleConfig.xml、Data/Main/…、Data/Optional/…
+    fs::create_directories(t.dir / "a/Data/FOMOD");
+    std::ofstream(t.dir / "a/Data/FOMOD/ModuleConfig.xml") << R"(<?xml version="1.0"?><config><installSteps order="Explicit"><installStep name="S"><optionalFileGroups>
+<group name="G" type="SelectAny"><plugins order="Explicit">
+<plugin name="Main files"><files><folder source="Main" destination=""/></files><typeDescriptor><type name="Recommended"/></typeDescriptor></plugin>
+</plugins></group></optionalFileGroups></installStep></installSteps></config>)";
+    put(t.dir / "a/Data/Main/textures/x.dds", "X");
+    put(t.dir / "a/Data/Optional/textures/y.dds", "Y");
+    put(t.dir / "a/Data/images/main.jpg", "J");
+    CHECK(zip_dir(t.dir / "a", t.dir / "a.zip"));
+    InstallOptions o;
+    o.name = "FRP";
+    o.fomod = FomodMode::Defaults;
+    const auto r = install_archive(inst, (t.dir / "a.zip").string(), o);
+    CHECK(r.fomod);
+    CHECK(fs::exists(t.dir / "inst/mods/FRP/textures/x.dds"));
+    CHECK(!fs::exists(t.dir / "inst/mods/FRP/FOMOD"));
+    CHECK(!fs::exists(t.dir / "inst/mods/FRP/Optional"));
 }
