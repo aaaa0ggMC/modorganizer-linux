@@ -102,3 +102,23 @@ TEST(local_saves_link_but_never_clobber_real_saves) {
     CHECK(fs::is_symlink(docs / "Saves"));
     CHECK_EQ(slurp(docs / "Saves/a.ess"), std::string("SAVE"));
 }
+
+TEST(case_variant_shadows_of_the_target_are_backed_up) {
+    Tmp t;
+    // 游戏原版运行时建的 Plugins.txt；映射目标是 plugins.txt。Wine 会优先打开大小写一致的 Plugins.txt。
+    put(t.dir / "Plugins.txt", "# vanilla\n");
+    fs::create_symlink(t.dir / "elsewhere", t.dir / "PLUGINS.TXT");
+    put(t.dir / "loadorder.txt", "keep\n");
+    CHECK_EQ(backup_case_variants(t.dir / "plugins.txt"), std::size_t{2});
+    CHECK(!fs::exists(fs::symlink_status(t.dir / "Plugins.txt")));
+    CHECK(!fs::exists(fs::symlink_status(t.dir / "PLUGINS.TXT")));
+    CHECK(fs::exists(t.dir / "Plugins.txt.mol-backup"));
+    CHECK(fs::exists(t.dir / "loadorder.txt"));
+    CHECK_EQ(backup_case_variants(t.dir / "plugins.txt"), std::size_t{0});  // 幂等
+    // 已有备份 → 拒绝，不覆盖
+    put(t.dir / "Plugins.txt", "# again\n");
+    bool threw = false;
+    try { backup_case_variants(t.dir / "plugins.txt"); } catch (const Error&) { threw = true; }
+    CHECK(threw);
+    CHECK(fs::exists(t.dir / "Plugins.txt"));
+}

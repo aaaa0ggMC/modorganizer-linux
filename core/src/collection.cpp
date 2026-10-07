@@ -170,6 +170,10 @@ Collection parse_collection(std::string_view json) {
             mod.has_choices = true;
         }
         if (const auto* p = sub(m, "patches"); p && p->is_object() && !p->object().empty()) mod.has_patches = true;
+        if (const auto* det = sub(m, "details")) mod.mod_type = lower(S(*det, "type"));
+        if (const auto* h = sub(m, "hashes"); h && h->is_array())
+            for (const auto& e : h->array())
+                if (auto path = S(e, "path"); !path.empty()) mod.hashes.emplace_back(std::move(path), S(e, "md5"));
         if (mod.name.empty() && mod.source.logical_filename.empty()) continue;
         if (mod.name.empty()) mod.name = mod.source.logical_filename;
         c.mods.push_back(std::move(mod));
@@ -272,6 +276,7 @@ State load_state(const Instance& inst, std::string_view slug) {
             o.skip = B(v, "skip");
             o.fomod_defaults = B(v, "fomod_defaults");
             o.archive = S(v, "archive");
+            o.reinstall = B(v, "reinstall");
             if (auto cj = S(v, "choices"); !cj.empty()) {
                 o.choices = fomod::parse_choices_json(cj);
                 o.has_choices = true;
@@ -306,6 +311,7 @@ void save_state(const Instance& inst, const State& s) {
         e["skip"] = o.skip;
         e["fomod_defaults"] = o.fomod_defaults;
         e["archive"] = std::string_view(o.archive);
+        e["reinstall"] = o.reinstall;
         e["choices"] = o.has_choices ? fomod::choices_to_json(o.choices) : std::string();
     }
     atomic_write(fs::path(collection_dir(inst, s.slug)) / "state.json", json_dump(doc));
@@ -347,7 +353,14 @@ NexusIndex index_nexus_files(const Instance& inst, std::string_view profile) {
 }
 
 // FOMOD 选择的指纹（写进 meta.ini 的 mol_fomod；同一个 Nexus 文件只有选择相同才复用）：
-// "choices:<xxh64>" | "defaults" | ""（没走 FOMOD，或不知道——MO2 / nexus install 装的）
+// "choices:<xxh64>" | "replicate:<xxh64>"（按清单 hashes 复刻）| "defaults" | ""（没走 FOMOD，或不知道——MO2 / nexus install 装的）
+std::string replicate_fingerprint(const std::vector<std::pair<std::string, std::string>>& hashes) {
+    std::string all;
+    for (const auto& [p, h] : hashes) all += p + '\0' + h + '\n';
+    char buf[17];
+    std::snprintf(buf, sizeof buf, "%016llx", static_cast<unsigned long long>(xxh64(all)));
+    return std::string("replicate:") + buf;
+}
 std::string fomod_fingerprint(const fomod::Choices* choices, bool defaults) {
     if (choices) {
         char buf[17];
@@ -499,6 +512,17 @@ Report install_collection(const Instance& inst, const NexusClient* client, const
     }
 
     std::optional<NexusIndex> nexus_files;  // 首次用到时建
+    // FOMOD 的 fileDependency：清单插件列表里启用的插件按 Active 算——那是策展人装完后的环境；
+    // 按安装顺序，被依赖的 mod 可能排在后面、此刻还没装上（例：Skyrim Unbound 的 Bruma 选项要 BSHeartland.esm）
+    std::set<std::string> collection_plugins;
+    for (const auto& p : c.plugins) if (p.enabled) collection_plugins.insert(lower(p.name));
+    // 清单 hashes 的复刻优先于 FOMOD 默认；用户/清单给了具体选择则按选择
+    auto replicates = [&](const Mod& m, const Override& ov) { return !m.hashes.empty() && !ov.has_choices && !m.has_choices; };
+    auto wanted_fingerprint = [&](const Mod& m, const Override& ov) {
+        if (replicates(m, ov)) return replicate_fingerprint(m.hashes);
+        const fomod::Choices* want_choices = ov.has_choices ? &ov.choices : m.has_choices ? &m.choices : nullptr;
+        return fomod_fingerprint(want_choices, ov.fomod_defaults || opt.fomod_defaults);
+    };
     for (const std::size_t idx : order) {
         const Mod& m = c.mods[idx];
         const std::string key = m.key();
@@ -535,8 +559,16 @@ Report install_collection(const Instance& inst, const NexusClient* client, const
             save_state(inst, state);
         };
 
-        // 已完成
+        // 已完成；但装的内容与现在要的不同时原地重装：用户要求重装，或清单要求复刻而旧版本是按 FOMOD 默认装的
+        bool reinstall = false;
         if (ms.status == "installed" && !ms.mod_dir.empty() && fs::is_directory(fs::path(std::string(inst.mods_dir)) / ms.mod_dir, ec)) {
+            if (ov.reinstall) reinstall = true;
+            else if (replicates(m, ov) && ov.archive.empty()) {
+                const Ini meta = Ini::load((fs::path(std::string(inst.mods_dir)) / ms.mod_dir / "meta.ini").string());
+                reinstall = std::string(meta.get("General", "mol_fomod").value_or("")) != replicate_fingerprint(m.hashes);
+            }
+        }
+        if (!reinstall && ms.status == "installed" && !ms.mod_dir.empty() && fs::is_directory(fs::path(std::string(inst.mods_dir)) / ms.mod_dir, ec)) {
             out.status = "installed";
             out.mod_dir = ms.mod_dir;
             ++rep.installed;
@@ -548,6 +580,13 @@ Report install_collection(const Instance& inst, const NexusClient* client, const
                 set_mod_meta(md, "modid", std::to_string(m.source.mod_id));
                 set_mod_meta(md, "fileid", std::to_string(m.source.file_id));
                 if (!m.version.empty()) set_mod_meta(md, "version", m.version);
+            }
+            if (m.deploys_to_root()) {  // 早期版本把 ENB 预设之类装成了普通 mod（落到 Data/ 下，ENB 找不到）：布局相同，补上根目录标记即可
+                const std::string md = (fs::path(std::string(inst.mods_dir)) / ms.mod_dir).string();
+                if (Ini::load(md + "/meta.ini").get("General", "mol_root").value_or("") != "true") {
+                    mark_mod_root(md, true);
+                    rep.notes.push_back(m.name + ": marked as a root-folder mod (Vortex type '" + m.mod_type + "' deploys to the game folder)");
+                }
             }
             continue;
         }
@@ -567,14 +606,13 @@ Report install_collection(const Instance& inst, const NexusClient* client, const
         }
 
         // 同一个 Nexus 文件已经装在实例里（另一个集合、`nexus install` 或 MO2 装的，meta.ini 的 modid/fileid 一致）→ 复用，不再装一份
-        if (ov.archive.empty() && m.source.type == "nexus" && m.source.mod_id > 0 && m.source.file_id > 0) {
+        if (!reinstall && ov.archive.empty() && m.source.type == "nexus" && m.source.mod_id > 0 && m.source.file_id > 0) {
             if (!nexus_files) nexus_files = index_nexus_files(inst, profile);
             // 选择不同就不复用（否则两个集合/两个 profile 选了不同 FOMOD 选项会串味）：
-            // 想要具体选择 → 指纹必须相同；想要默认/不需要选择 → 对方没记指纹（多半没 FOMOD）或也是默认即可
-            const fomod::Choices* want_choices = ov.has_choices ? &ov.choices : m.has_choices ? &m.choices : nullptr;
-            const std::string want = fomod_fingerprint(want_choices, ov.fomod_defaults || opt.fomod_defaults);
+            // 想要具体选择/复刻 → 指纹必须相同；想要默认/不需要选择 → 对方没记指纹（多半没 FOMOD）或也是默认即可
+            const std::string want = wanted_fingerprint(m, ov);
             const auto compatible = [&](const std::string& have) {
-                if (want_choices) return have == want;
+                if (want != "defaults" && !want.empty()) return have == want;
                 return have.empty() || have == "defaults";
             };
             if (auto hit = nexus_files->find({m.source.mod_id, m.source.file_id}); hit != nexus_files->end() && compatible(hit->second.second)) {
@@ -662,8 +700,14 @@ Report install_collection(const Instance& inst, const NexusClient* client, const
             io.profile = profile;
             io.fomod_env.game_version = std::string(game_version.empty() ? "0.0.0.0" : game_version);
             bool need_choices = false;
+            io.fomod_env.file_state = [base = std::function<std::string(std::string_view)>{}, &inst, &profile, &collection_plugins](std::string_view f) mutable {
+                if (f.find_first_of("/\\") == std::string_view::npos && collection_plugins.count(lower(f))) return std::string("Active");
+                if (!base) base = fomod_file_state(inst, profile);  // 遍历全部 mod：只在真有 FOMOD 条件时才建
+                return base(f);
+            };
             if (ov.has_choices) { io.fomod = FomodMode::Choices; io.choices = ov.choices; }
             else if (m.has_choices) { io.fomod = FomodMode::Choices; io.choices = m.choices; io.fomod_lenient = true; }
+            else if (replicates(m, ov)) { io.fomod = FomodMode::Replicate; io.replicate = m.hashes; }
             else if (ov.fomod_defaults || opt.fomod_defaults) io.fomod = FomodMode::Defaults;
             else io.fomod = FomodMode::Unset;
             // 目录名冲突（大小写不敏感、按清理后的名字比较）：不是我们装的同名目录 → 加后缀
@@ -671,15 +715,28 @@ Report install_collection(const Instance& inst, const NexusClient* client, const
             if (!ms.mod_dir.empty()) dir = ms.mod_dir;
             else if (mod_name_taken(inst, dir, profile)) dir += " [" + (m.source.tag.empty() ? std::to_string(idx) : m.source.tag) + "]";
             io.name = dir;
+            io.replace_existing = reinstall;
+            io.force_root = m.deploys_to_root();
             // 之前中断留下的半成品（modlist 里没有但目录存在）：不处理，交给 install_archive 报错，避免误删
-            const auto res = mol::install_archive(inst, archive, io);
+            auto res = mol::install_archive(inst, archive, io);
             if (m.source.type == "nexus" && m.source.mod_id > 0) {  // MO2 兼容的来源信息，供「已安装？」判断与更新检查使用
                 const std::string md = std::string(res.path);
                 set_mod_meta(md, "gameName", m.domain.empty() ? std::string(nexus_game_domain(inst.cfg.game)) : m.domain);
                 set_mod_meta(md, "modid", std::to_string(m.source.mod_id));
                 set_mod_meta(md, "fileid", std::to_string(m.source.file_id));
                 if (!m.version.empty()) set_mod_meta(md, "version", m.version);
-                if (res.fomod) set_mod_meta(md, "mol_fomod", fomod_fingerprint(io.fomod == FomodMode::Choices ? &io.choices : nullptr, io.fomod == FomodMode::Defaults));
+                if (io.fomod == FomodMode::Replicate) set_mod_meta(md, "mol_fomod", replicate_fingerprint(io.replicate));
+                else if (res.fomod) set_mod_meta(md, "mol_fomod", fomod_fingerprint(io.fomod == FomodMode::Choices ? &io.choices : nullptr, io.fomod == FomodMode::Defaults));
+            }
+            if (reinstall) {
+                if (auto it = state.overrides.find(key); it != state.overrides.end()) it->second.reinstall = false;
+                nexus_files.reset();  // 目录内容/指纹变了
+            }
+            if (io.fomod == FomodMode::Replicate && !res.missing.empty()) {
+                std::string miss;
+                for (std::size_t i = 0; i < res.missing.size() && i < 5; ++i) miss += (i ? ", " : "") + res.missing[i];
+                if (res.missing.size() > 5) miss += ", …";
+                res.fomod_notes.push_back(std::to_string(res.missing.size()) + " file(s) the collection lists are not in this archive: " + miss);
             }
             ms.status = "installed";
             ms.mod_dir = std::string(res.name);
@@ -723,8 +780,10 @@ std::size_t apply_plugin_spec(const Instance& inst, const Collection& c, std::st
     std::vector<std::size_t> slots;
     std::vector<std::string> wanted;
     std::size_t applied = 0;
+    std::set<std::string> seen;  // 清单的插件列表可能有重复（Constellations 有 35 个）：只认第一次出现，否则重复项占掉槽位、把末尾的插件挤出列表
     for (const auto& spec : c.plugins) {
         const auto want = casefold(spec.name);
+        if (!seen.insert(std::string(want)).second) continue;
         for (std::size_t i = 0; i < list.rows.size(); ++i) {
             if (casefold(list.rows[i].name) != want) continue;
             if (!list.rows[i].forced) {

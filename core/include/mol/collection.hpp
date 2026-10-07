@@ -40,6 +40,11 @@ struct Mod {
     bool has_choices = false;
     fomod::Choices choices;   // 来自清单的 FOMOD 选择
     bool has_patches = false; // 清单带二进制补丁（暂不支持）
+    // 清单的 `hashes`（Vortex 的「复刻」安装）：策展人装出来的每个文件 (相对 mod 根的路径, md5)。
+    // 有它时不跑 FOMOD，而是按 md5 从压缩包里挑出这些文件放到对应路径（FOMOD 选择缺失或对不上都不影响）。
+    std::vector<std::pair<std::string, std::string>> hashes;
+    std::string mod_type;  // details.type：Vortex 的 mod 类型；"enb"/"dinput" 部署到游戏根目录（不是 Data/）
+    bool deploys_to_root() const { return mod_type == "enb" || mod_type == "dinput"; }
     std::string key() const { return source.tag.empty() ? name : source.tag; }  // 稳定标识（状态文件里的键）
 };
 
@@ -94,6 +99,7 @@ struct Override {
     bool has_choices = false;
     fomod::Choices choices;
     std::string archive;  // 用户自己提供的压缩包
+    bool reinstall = false;  // 已装好的也重装一次（原地替换；装完清掉）
 };
 struct State {
     std::string slug, name;

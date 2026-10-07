@@ -448,7 +448,12 @@ Resolved resolve(const Config& cfg, const Choices& choices, bool use_defaults, c
                     }
                     // NotUsable 插件在 MO2 里是灰掉且不勾选的（SelectAll 组也一样）；Vortex 记录的选择里可能带着它
                     // （例如只有说明文字、没有文件的「介绍」页）。按 MO2 语义忽略它，组的数量约束照常检查。
-                    if (!usable(types[idx])) continue;
+                    // 例外：集合清单（宽松模式）选中的、真有文件/标志的插件——它的 fileDependency 指向的 mod 在策展人那里
+                    // 已经装好，我们这边可能还没装到（安装顺序）。照策展人的选择装上。
+                    if (!usable(types[idx])) {
+                        if (!lenient || (g.plugins[idx].files.empty() && g.plugins[idx].flags.empty())) continue;
+                        lenient_notes->push_back("'" + nm + "' in group '" + g.name + "' is not usable yet here (it depends on other mods); installed as the collection recorded");
+                    }
                     sel.insert(idx);
                 }
                 for (std::size_t i = 0; i < g.plugins.size(); ++i)
@@ -460,7 +465,7 @@ Resolved resolve(const Config& cfg, const Choices& choices, bool use_defaults, c
                 else if (g.type == GroupType::All) {
                     std::size_t need = 0;
                     for (std::size_t i = 0; i < g.plugins.size(); ++i) if (usable(types[i])) ++need;
-                    if (n != need) give_up("group '" + g.name + "' requires all of its plugins");
+                    if (n < need) give_up("group '" + g.name + "' requires all of its plugins");
                 }
                 if (fallback) {
                     gs.explicit_choice = false;

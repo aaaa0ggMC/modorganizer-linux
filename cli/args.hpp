@@ -67,6 +67,17 @@ constexpr OptionSpec kOptRun[] = {
     {"dry-run", "", "--dry-run", "Print the launch command only; change nothing", false},
     {"args", "", "--args", "Arguments for the executable (one string, Windows-style quoting)", true},
     {"no-cow", "", "--no-cow", "Do not inject copy-on-write: writes through farm links change the original files", false},
+    {"force", "", "--force", "Launch even if the pre-launch check finds a problem that is known to crash the game", false},
+};
+constexpr OptionSpec kOptTerminate[] = {
+    {"dry-run", "", "--dry-run", "Only list the processes that would be ended", false},
+    {"timeout", "", "--timeout", "Seconds to wait after SIGTERM before SIGKILL (default 10)", true},
+};
+constexpr OptionSpec kOptFixVcrun[] = {
+    {"force", "", "--force", "Reinstall even if the runtime is already new enough", false},
+};
+constexpr OptionSpec kOptEnbInstall[] = {
+    {"archive", "", "--archive", "The ENB zip downloaded from enbdev.com (enbseries_skyrimse_v*.zip)", true},
 };
 constexpr OptionSpec kOptPromote[] = {
     {"filter", "", "--filter", "Glob(s) relative to overwrite/, comma separated, case-insensitive (required)", true},
@@ -131,6 +142,7 @@ constexpr OptionSpec kOptCollectionResolve[] = {
     {"fomod-defaults", "", "--fomod-defaults", "Install this mod's FOMOD with defaults", false},
     {"archive", "", "--archive", "Use this archive file for the mod", true},
     {"nxm", "", "--nxm", "nxm:// link (free Nexus accounts): downloads the file for this mod", true},
+    {"reinstall", "", "--reinstall", "Reinstall this (already installed) mod on the next `collection install`", false},
 };
 constexpr OptionSpec kOptLogs[] = {
     {"file", "", "--file", "Log file name inside the log directory (omit to list files)", true},

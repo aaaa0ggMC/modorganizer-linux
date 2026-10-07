@@ -7,6 +7,8 @@
 #include "mol/instance.hpp"
 #include "mol/pmr.hpp"
 
+#include <filesystem>
+
 namespace mol {
 
 struct SyncEntry {
@@ -47,5 +49,8 @@ struct SyncReport {
 SyncReport sync_plugins(const Instance& inst, const Game& game, mr* mem = default_mr());
 // 只做 profile 本地 ini / 存档那部分（不需要游戏层；sync_plugins 内部也调用它）。结果追加到 rep。
 void sync_profile_settings(const Instance& inst, SyncReport& rep, mr* mem = default_mr());
+// dst 同目录下只差大小写的同名条目（Wine 打开时优先大小写完全一致的那个，会遮住我们的链接）：
+// 真实文件改名为 <原名>.mol-backup（已有备份 → Error{io_error}），符号链接直接删。返回处理的个数。
+std::size_t backup_case_variants(const std::filesystem::path& dst);
 
 }  // namespace mol

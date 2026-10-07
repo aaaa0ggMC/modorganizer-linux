@@ -151,7 +151,8 @@ void ensure_wineserver_cow(const Instance& inst, std::string_view cow_library, i
         ::usleep(200 * 1000);
     }
     throw Error("wine_busy",
-                "a Wine server for this prefix is already running without copy-on-write; files written through the farm would change the originals",
+                "a Wine server for this prefix is already running without copy-on-write; files written through the farm would change the originals "
+                "(end it with `mo-linux terminate`)",
                 std::string(inst.cfg.prefix));
 }
 

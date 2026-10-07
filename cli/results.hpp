@@ -207,6 +207,18 @@ struct NexusDownloadData {
     std::int64_t file_id = 0;
 };
 
+// fix content-catalog / fix vcrun / enb install：一行给人看的 message + 机器可读的细节
+struct FixData {
+    std::pmr::string message;
+    bool changed = false;
+    std::pmr::string backup;                    // content-catalog：备份路径
+    std::pmr::string method;                    // vcrun：protontricks | redist
+    std::pmr::vector<std::pmr::string> before;  // vcrun：修复前各 dll 的版本（"msvcp140.dll 14.0.24215.1"）
+    std::pmr::vector<std::pmr::string> after;
+    std::pmr::string mod_name;                  // enb install：装成的根目录型 mod
+    std::pmr::vector<std::pmr::string> files;   // enb install：放进 mod 的文件
+};
+
 struct SkseInstallData {
     std::pmr::string game_version;
     std::pmr::string runtime_dll;
@@ -600,6 +612,21 @@ struct ExecutableRow {
 };
 struct ExecutablesData {
     std::pmr::vector<ExecutableRow> executables;
+};
+
+// ---- terminate --------------------------------------------------------------
+struct TerminateProcRow {
+    std::int64_t pid = 0;
+    std::pmr::string command;
+    std::pmr::string reason;  // farm_cwd | farm_cmdline | prefix_env
+};
+struct TerminateData {
+    bool dry_run = false;
+    std::pmr::vector<TerminateProcRow> processes;
+    std::pmr::vector<std::int64_t> terminated;
+    std::pmr::vector<std::int64_t> killed;
+    std::pmr::vector<std::int64_t> remaining;
+    bool wineserver_killed = false;
 };
 
 // ---- run --------------------------------------------------------------------

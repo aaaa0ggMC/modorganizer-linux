@@ -40,7 +40,29 @@ bool ini_true(const fs::path& settings, std::string_view key) {
     }
     return false;
 }
+// 同一目录里只有大小写不同的同名文件（例：游戏原版运行时建的 Plugins.txt，而映射目标是 plugins.txt）。
+// Linux 上两者并存，但 Wine 打开时**优先用大小写完全一致的那个**——游戏读到的是旧文件，我们的链接形同虚设。
+// 建链接前把这些「影子」改名成 <原名>.mol-backup（已有备份则拒绝，与主路径一致）。返回处理的个数。
 }  // namespace
+
+std::size_t backup_case_variants(const fs::path& dst) {
+    std::error_code ec;
+    std::size_t n = 0;
+    const auto want = casefold(dst.filename().string());
+    std::vector<fs::path> shadows;
+    for (fs::directory_iterator it(dst.parent_path(), ec), end; !ec && it != end; it.increment(ec))
+        if (it->path().filename() != dst.filename() && casefold(it->path().filename().string()) == want) shadows.push_back(it->path());
+    for (const auto& p : shadows) {
+        if (fs::is_symlink(fs::symlink_status(p, ec))) { fs::remove(p, ec); ++n; continue; }  // 我们以前建的、大小写不同的链接
+        fs::path bak = p;
+        bak += ".mol-backup";
+        if (fs::exists(fs::symlink_status(bak, ec))) throw Error("io_error", "plugins sync: backup already exists, refusing to overwrite", bak.string());
+        fs::rename(p, bak, ec);
+        if (ec) io_fail("backup existing file", p, ec);
+        ++n;
+    }
+    return n;
+}
 
 void sync_profile_settings(const Instance& inst, SyncReport& rep, mr* mem) {
     std::error_code ec;
@@ -134,6 +156,7 @@ SyncReport sync_plugins(const Instance& inst, const Game& game, mr* mem) {
             rep.entries.push_back(std::move(e));
             continue;
         }
+        if (backup_case_variants(d) > 0) rep.changed = true;
 
         const auto st = fs::symlink_status(d, ec);
         if (fs::is_symlink(st)) {

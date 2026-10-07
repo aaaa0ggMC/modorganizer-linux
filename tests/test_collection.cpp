@@ -499,3 +499,145 @@ TEST(downloads_run_in_parallel_and_installs_stay_ordered) {
     for (const auto& e : dl) CHECK_EQ(e.second, all);
     CHECK_EQ(dl.back().first, all);
 }
+
+namespace {
+Instance tmp_instance(const fs::path& root) {
+    Instance inst;
+    inst.root.assign((root / "inst").string());
+    inst.mods_dir.assign((root / "inst/mods").string());
+    inst.profiles_dir.assign((root / "inst/profiles").string());
+    inst.downloads_dir.assign((root / "inst/downloads").string());
+    inst.overwrite_dir.assign((root / "inst/overwrite").string());
+    inst.cfg.game.assign("skyrimse");
+    inst.cfg.profile.assign("Default");
+    fs::create_directories(root / "inst/profiles/Default");
+    put(root / "game/Data/Skyrim.esm");
+    inst.cfg.game_dir.assign((root / "game").string());
+    return inst;
+}
+}  // namespace
+
+TEST(manifest_hashes_replicate_the_curators_files_and_fix_old_installs) {
+    if (!have_zip()) return;
+    Tmp t;
+    // FOMOD 的默认只装 a.esp；策展人实际装的是选项目录里的 b.esp（改名放到根）+ Docs/readme.txt
+    fs::create_directories(t.dir / "src/rp/fomod");
+    std::ofstream(t.dir / "src/rp/fomod/ModuleConfig.xml") << R"(<?xml version="1.0"?><config><installSteps order="Explicit">
+<installStep name="S"><optionalFileGroups><group name="G" type="SelectExactlyOne"><plugins order="Explicit">
+<plugin name="A"><files><file source="opts/a/a.esp" destination="a.esp"/></files><typeDescriptor><type name="Recommended"/></typeDescriptor></plugin>
+<plugin name="B"><files><file source="opts/b/b.esp" destination="b.esp"/></files><typeDescriptor><type name="Optional"/></typeDescriptor></plugin>
+</plugins></group></optionalFileGroups></installStep></installSteps></config>)";
+    put(t.dir / "src/rp/opts/a/a.esp", "AAA");
+    put(t.dir / "src/rp/opts/b/b.esp", "BBB");
+    put(t.dir / "src/rp/docs/readme.txt", "README");
+    fs::create_directories(t.dir / "inst/downloads");
+    zip_dir(t.dir / "src/rp", t.dir / "inst/downloads/rp.zip");
+    const std::string md5 = md5_file((t.dir / "inst/downloads/rp.zip").string());
+    const auto sz = fs::file_size(t.dir / "inst/downloads/rp.zip");
+    const std::string head = R"({"info":{"name":"C","domainName":"skyrimspecialedition"},"mods":[{"name":"RP","version":"1","optional":false,"source":{"type":"nexus","modId":7,"fileId":8,"fileSize":)" +
+                             std::to_string(sz) + R"(,"md5":")" + md5 + R"(","tag":"rp"})";
+    const Collection plain = parse_collection(head + R"(}],"modRules":[]})");
+    const Collection coll = parse_collection(head + R"(,"hashes":[
+        {"path":"Renamed.esp","md5":")" + md5_hex("BBB") + R"("},{"path":"Docs\\readme.txt","md5":")" + md5_hex("README") + R"("},
+        {"path":"gone.esp","md5":")" + md5_hex("nope") + R"("}]}],"modRules":[]})");
+    CHECK_EQ(coll.mods[0].hashes.size(), std::size_t{3});
+    Instance inst = tmp_instance(t.dir);
+    State st;
+    st.slug = "c";
+    // 旧版本：没有 hashes，按 FOMOD 默认装
+    InstallOptions defaults;
+    defaults.fomod_defaults = true;
+    CHECK(install_collection(inst, nullptr, plain, st, defaults, {}).complete());
+    const fs::path dir = t.dir / "inst/mods" / st.mods["rp"].mod_dir;
+    CHECK(fs::exists(dir / "a.esp"));
+    // 新版本：按 hashes 复刻，原地重装
+    const Report r = install_collection(inst, nullptr, coll, st, {}, {});
+    CHECK(r.complete());
+    CHECK_EQ(t.dir / "inst/mods" / st.mods["rp"].mod_dir, dir);
+    CHECK(!fs::exists(dir / "a.esp"));
+    CHECK_EQ(slurp(dir / "Renamed.esp"), std::string("BBB"));
+    CHECK_EQ(slurp(dir / "Docs/readme.txt"), std::string("README"));
+    CHECK(st.mods["rp"].note.find("gone.esp") != std::string::npos);
+    CHECK(slurp(dir / "meta.ini").find("mol_fomod=replicate:") != std::string::npos);
+    CHECK_EQ(slurp(t.dir / "inst/profiles/Default/modlist.txt").find(st.mods["rp"].mod_dir), slurp(t.dir / "inst/profiles/Default/modlist.txt").rfind(st.mods["rp"].mod_dir));
+    // 再跑：指纹一致，不重装
+    fs::remove(dir / "Renamed.esp");
+    CHECK(install_collection(inst, nullptr, coll, st, {}, {}).complete());
+    CHECK(!fs::exists(dir / "Renamed.esp"));
+    // 用户要求重装
+    st.overrides["rp"].reinstall = true;
+    CHECK(install_collection(inst, nullptr, coll, st, {}, {}).complete());
+    CHECK(fs::exists(dir / "Renamed.esp"));
+    CHECK(!st.overrides["rp"].reinstall);
+}
+
+TEST(manifest_choice_of_a_not_yet_usable_plugin_is_honoured) {
+    if (!have_zip()) return;
+    Tmp t;
+    // Bruma 只有 BSHeartland.esm 激活时才可用；X 依赖 Other.esp（在清单插件列表里，但此刻还没装）
+    fs::create_directories(t.dir / "src/un/fomod");
+    std::ofstream(t.dir / "src/un/fomod/ModuleConfig.xml") << R"(<?xml version="1.0"?><config><installSteps order="Explicit">
+<installStep name="S"><optionalFileGroups><group name="Addons" type="SelectAny"><plugins order="Explicit">
+<plugin name="Bruma"><files><file source="bruma.esp" destination="bruma.esp"/></files><typeDescriptor><dependencyType><defaultType name="NotUsable"/><patterns>
+<pattern><dependencies operator="And"><fileDependency file="BSHeartland.esm" state="Active"/></dependencies><type name="Optional"/></pattern></patterns></dependencyType></typeDescriptor></plugin>
+<plugin name="Intro"><typeDescriptor><type name="NotUsable"/></typeDescriptor></plugin>
+</plugins></group></optionalFileGroups></installStep></installSteps>
+<conditionalFileInstalls><patterns><pattern><dependencies operator="And"><fileDependency file="Other.esp" state="Active"/></dependencies>
+<files><file source="x.esp" destination="x.esp"/></files></pattern></patterns></conditionalFileInstalls></config>)";
+    put(t.dir / "src/un/bruma.esp", "BR");
+    put(t.dir / "src/un/x.esp", "X");
+    fs::create_directories(t.dir / "inst/downloads");
+    zip_dir(t.dir / "src/un", t.dir / "inst/downloads/un.zip");
+    const std::string md5 = md5_file((t.dir / "inst/downloads/un.zip").string());
+    const auto sz = fs::file_size(t.dir / "inst/downloads/un.zip");
+    const Collection coll = parse_collection(R"({"info":{"name":"C","domainName":"skyrimspecialedition"},"mods":[{"name":"UN","version":"1","optional":false,"source":{"type":"nexus","modId":7,"fileId":8,"fileSize":)" +
+        std::to_string(sz) + R"(,"md5":")" + md5 + R"(","tag":"un"},"choices":{"type":"fomod","options":[{"name":"S","groups":[{"name":"Addons","choices":[{"name":"Bruma","idx":0},{"name":"Intro","idx":1}]}]}]}}],
+        "modRules":[],"plugins":[{"name":"other.esp","enabled":true}]})");
+    Instance inst = tmp_instance(t.dir);
+    State st;
+    st.slug = "c";
+    CHECK(install_collection(inst, nullptr, coll, st, {}, {}).complete());
+    const fs::path dir = t.dir / "inst/mods" / st.mods["un"].mod_dir;
+    CHECK_EQ(slurp(dir / "bruma.esp"), std::string("BR"));
+    CHECK_EQ(slurp(dir / "x.esp"), std::string("X"));
+    CHECK(st.mods["un"].note.find("Bruma") != std::string::npos);
+}
+
+TEST(vortex_enb_and_dinput_mods_deploy_to_the_game_folder) {
+    if (!have_zip()) return;
+    Tmp t;
+    put(t.dir / "src/enb/enbseries/a.fx", "FX");
+    put(t.dir / "src/enb/enblocal.ini", "[PROXY]");
+    fs::create_directories(t.dir / "inst/downloads");
+    zip_dir(t.dir / "src/enb", t.dir / "inst/downloads/enb.zip");
+    const std::string md5 = md5_file((t.dir / "inst/downloads/enb.zip").string());
+    const auto sz = fs::file_size(t.dir / "inst/downloads/enb.zip");
+    const std::string mod = R"({"name":"Preset","version":"1","optional":false,"source":{"type":"nexus","modId":7,"fileId":8,"fileSize":)" + std::to_string(sz) +
+                            R"(,"md5":")" + md5 + R"(","tag":"p"},"details":{"category":"Visuals","type":"%T%"}})";
+    auto with_type = [&](const std::string& ty) {
+        std::string m = mod;
+        m.replace(m.find("%T%"), 3, ty);
+        return parse_collection(R"({"info":{"name":"C","domainName":"skyrimspecialedition"},"mods":[)" + m + R"(],"modRules":[]})");
+    };
+    CHECK(with_type("enb").mods[0].deploys_to_root());
+    CHECK(!with_type("").mods[0].deploys_to_root());
+    Instance inst = tmp_instance(t.dir);
+    State st;
+    st.slug = "c";
+    // 旧版本：不认 type，装成普通 mod
+    CHECK(install_collection(inst, nullptr, with_type(""), st, {}, {}).complete());
+    const fs::path dir = t.dir / "inst/mods" / st.mods["p"].mod_dir;
+    CHECK(slurp(dir / "meta.ini").find("mol_root=true") == std::string::npos);
+    // 新版本：已装的补上根目录标记（布局不变，不重装）
+    const Report r = install_collection(inst, nullptr, with_type("enb"), st, {}, {});
+    CHECK(r.complete());
+    CHECK(slurp(dir / "meta.ini").find("mol_root=true") != std::string::npos);
+    CHECK(fs::exists(dir / "enbseries/a.fx"));
+    // 新装：直接是根目录型
+    State st2;
+    st2.slug = "c2";
+    fs::remove_all(t.dir / "inst/mods");
+    put(t.dir / "inst/profiles/Default/modlist.txt", "");
+    CHECK(install_collection(inst, nullptr, with_type("enb"), st2, {}, {}).complete());
+    CHECK(slurp(t.dir / "inst/mods" / st2.mods["p"].mod_dir / "meta.ini").find("mol_root=true") != std::string::npos);
+}

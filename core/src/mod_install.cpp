@@ -15,6 +15,7 @@
 #include <vector>
 
 #include "mol/casefold.hpp"
+#include "mol/md5.hpp"
 #include "mol/mo2fmt.hpp"
 #include "mol/xxh64.hpp"
 
@@ -91,6 +92,84 @@ void move_children_up(const fs::path& from, const fs::path& to) {
     }
 }
 
+// 集合清单的「复刻」安装：按 (相对 mod 根的路径, md5) 从解压目录 src 里挑文件放进 stage。
+// 先认同一路径（大小写不敏感，也认 Data/ 前缀）且 md5 相符的；否则按 md5 在整个压缩包里找（FOMOD 的选项目录结构与成品不同）。
+// 同一源文件可以放到多处：用硬链接（同一文件系统），不行再复制。返回放好的文件数；找不到的记进 missing。
+std::size_t replicate_files(const fs::path& src, const fs::path& stage, const std::vector<std::pair<std::string, std::string>>& want,
+                            std::vector<std::string>& missing) {
+    std::error_code ec;
+    std::map<std::string, fs::path> by_path;  // casefold(相对路径) → 文件
+    for (fs::recursive_directory_iterator it(src, ec), end; !ec && it != end; it.increment(ec))
+        if (it->is_regular_file(ec)) by_path.emplace(std::string(casefold(it->path().lexically_relative(src).generic_string())), it->path());
+    std::optional<std::map<std::string, fs::path>> by_md5;  // 只在路径对不上时才算全部文件的 md5
+    std::map<std::string, std::string> dirs;                // casefold(已建的目录) → 实际写法：同一目录不因大小写不同建两份
+    std::size_t placed = 0;
+    for (const auto& [rel_in, md5_in] : want) {
+        std::string rel = rel_in;
+        std::replace(rel.begin(), rel.end(), '\\', '/');
+        const std::string md5(casefold(md5_in));
+        const fs::path relp = fs::path(rel).lexically_normal();
+        if (rel.empty() || relp.is_absolute() || relp.begin()->string() == "..") { missing.push_back(rel_in); continue; }
+        fs::path from;
+        for (const std::string& cand : {relp.generic_string(), "data/" + relp.generic_string()}) {
+            auto it = by_path.find(std::string(casefold(cand)));
+            if (it != by_path.end() && (md5.empty() || std::string(casefold(md5_file(it->second.string()))) == md5)) { from = it->second; break; }
+        }
+        if (from.empty() && !md5.empty()) {
+            if (!by_md5) {
+                by_md5.emplace();
+                for (const auto& [k, p] : by_path) by_md5->emplace(std::string(casefold(md5_file(p.string()))), p);
+            }
+            if (auto it = by_md5->find(md5); it != by_md5->end()) from = it->second;
+        }
+        if (from.empty()) { missing.push_back(rel_in); continue; }
+        // 目标路径：父目录沿用已建的大小写
+        fs::path to = stage;
+        std::string acc;
+        const fs::path parent = relp.parent_path();
+        for (const auto& comp : parent) {
+            acc += std::string(casefold(comp.string())) + "/";
+            auto [it, fresh] = dirs.emplace(acc, (to / comp).string());
+            to = fs::path(it->second);
+        }
+        to /= relp.filename();
+        fs::create_directories(to.parent_path(), ec);
+        fs::remove(to, ec);
+        fs::create_hard_link(from, to, ec);
+        if (ec) {
+            ec.clear();
+            fs::copy_file(from, to, fs::copy_options::overwrite_existing, ec);
+            if (ec) throw Error("io_error", "cannot place file: " + ec.message(), to.string());
+        }
+        ++placed;
+    }
+    return placed;
+}
+
+// Windows 上打的部分 zip 用 '\\' 作路径分隔符，Linux 的解压工具把它当文件名的一部分（"Data\\SKSE\\Plugins\\X.dll"）。
+// 把这类名字拆回目录；拆出 ".." 或空段的拒绝。返回处理的条目数。
+std::size_t split_backslash_names(const fs::path& root) {
+    std::error_code ec;
+    std::vector<fs::path> bad;
+    for (fs::recursive_directory_iterator it(root, ec), end; !ec && it != end; it.increment(ec))
+        if (it->path().filename().string().find('\\') != std::string::npos) bad.push_back(it->path());
+    // 深的先处理，免得父目录先被移走
+    std::sort(bad.begin(), bad.end(), [](const fs::path& a, const fs::path& b) { return a.string().size() > b.string().size(); });
+    for (const auto& p : bad) {
+        std::string name = p.filename().string();
+        std::replace(name.begin(), name.end(), '\\', '/');
+        const fs::path rel = fs::path(name).lexically_normal();
+        for (const auto& c : rel)
+            if (c == ".." || c.empty()) throw Error("invalid_argument", "archive entry escapes the target directory", p.string());
+        if (rel.is_absolute()) throw Error("invalid_argument", "archive entry escapes the target directory", p.string());
+        const fs::path to = p.parent_path() / rel;
+        fs::create_directories(to.parent_path(), ec);
+        fs::rename(p, to, ec);
+        if (ec) throw Error("io_error", "cannot split a backslash path: " + ec.message(), p.string());
+    }
+    return bad.size();
+}
+
 std::vector<fs::path> children(const fs::path& d) {
     std::vector<fs::path> v;
     std::error_code ec;
@@ -120,6 +199,7 @@ bool looks_like_data_root(const fs::path& d) {
     std::error_code ec;
     for (const auto& c : children(d)) {
         const auto name = casefold(c.filename().string());
+        if (name == "meta.ini") continue;  // MO2 的 mod 元数据，不是游戏数据
         if (fs::is_directory(c, ec)) {
             for (const char* f : folders) if (name == f) return true;
         } else {
@@ -188,6 +268,8 @@ std::function<std::string(std::string_view)> make_file_state(const Instance& ins
 
 std::string sanitize_mod_name(std::string_view name) { return sanitize(std::string(name)); }
 
+bool is_data_root_dir(std::string_view dir) { return looks_like_data_root(fs::path(std::string(dir))); }
+
 bool mod_name_taken(const Instance& inst, std::string_view name_in, std::string_view profile) {
     const std::string want = std::string(casefold(sanitize(std::string(name_in))));
     std::error_code ec;
@@ -250,9 +332,14 @@ InstallResult install_archive(const Instance& inst, std::string_view archive_s, 
     if (name.empty()) throw Error("invalid_argument", "empty mod name");
     const fs::path mods{std::string(inst.mods_dir)};
     const fs::path target = mods / name;
-    if (fs::exists(fs::symlink_status(target, ec))) throw Error("invalid_argument", "mod directory already exists: " + name, target.string());
+    const bool replacing = opt.replace_existing && fs::is_directory(fs::symlink_status(target, ec));
+    bool listed = false;
     for (const auto& m : list_mods(inst, profile, mem))
-        if (casefold(m.name) == casefold(name)) throw Error("invalid_argument", "mod already exists in modlist: " + name);
+        if (casefold(m.name) == casefold(name)) listed = true;
+    if (!opt.replace_existing) {
+        if (fs::exists(fs::symlink_status(target, ec))) throw Error("invalid_argument", "mod directory already exists: " + name, target.string());
+        if (listed) throw Error("invalid_argument", "mod already exists in modlist: " + name);
+    }
     fs::create_directories(mods, ec);
 
     const fs::path tmp = mods / (".mol-extract-" + std::to_string(::getpid()));
@@ -261,12 +348,14 @@ InstallResult install_archive(const Instance& inst, std::string_view archive_s, 
     InstallResult res(mem);
     try {
         extract(archive, tmp);
+        split_backslash_names(tmp);
         validate_tree(tmp);
         // 1) 去掉「只有一个顶层目录」的包装
         for (int guard = 0; guard < 4; ++guard) {
             auto kids = children(tmp);
             if (kids.size() != 1 || !fs::is_directory(kids[0], ec)) break;
             if (casefold(kids[0].filename().string()) == "data") break;  // Data 目录不是包装
+            if (casefold(kids[0].filename().string()) == "fomod") break;  // 整个包都放在 fomod/ 里（源路径写成 fomod\…）：剥掉就认不出 FOMOD 了
             if (looks_like_data_root(tmp)) break;                         // 唯一的目录本身就是游戏数据目录（如 SKSE/、Scripts/），不能当包装剥掉
             const fs::path inner = kids[0];
             const fs::path hop = tmp / ".mol-hop";
@@ -275,8 +364,28 @@ InstallResult install_archive(const Instance& inst, std::string_view archive_s, 
             move_children_up(hop, tmp);
             fs::remove(hop, ec);
         }
-        // 1.5) FOMOD
-        if (const std::string cfgp = fomod::find_module_config(tmp.string()); !cfgp.empty() && opt.fomod != FomodMode::Raw) {
+        // 1.5) 复刻（集合清单的 hashes）：取代 FOMOD
+        if (opt.fomod == FomodMode::Replicate) {
+            const fs::path stage = mods / (".mol-stage-" + std::to_string(::getpid()));
+            fs::remove_all(stage, ec);
+            fs::create_directories(stage, ec);
+            std::size_t placed = 0;
+            try {
+                placed = replicate_files(tmp, stage, opt.replicate, res.missing);
+            } catch (...) {
+                fs::remove_all(stage, ec);
+                throw;
+            }
+            if (placed == 0 && !opt.replicate.empty()) {
+                fs::remove_all(stage, ec);
+                throw Error("invalid_argument", "none of the files the collection lists were found in this archive", archive.string());
+            }
+            fs::remove_all(tmp, ec);
+            fs::rename(stage, tmp, ec);
+            if (ec) throw Error("io_error", "cannot stage the replicated files: " + ec.message(), stage.string());
+        }
+        // 1.6) FOMOD
+        else if (const std::string cfgp = fomod::find_module_config(tmp.string()); !cfgp.empty() && opt.fomod != FomodMode::Raw) {
             if (opt.fomod == FomodMode::Unset)
                 throw Error("fomod_choices_required",
                             "this archive has a FOMOD installer; run `fomod inspect` and pass --fomod CHOICES.json, or --fomod-defaults, or --no-fomod",
@@ -304,10 +413,15 @@ InstallResult install_archive(const Instance& inst, std::string_view archive_s, 
         // 2) 布局
         bool root = force_root || has_exe_or_dll(tmp);
         if (!root) {
+            // 顶层有 Data 目录、旁边只有说明文档之类（不是游戏数据）→ Data 才是 mod 根（与 MO2/Vortex 一致）；
+            // 说明文档一并留在根下。例：Interesting NPCs 的 Hotfix = Data/ + "Patch Notes.txt"
             auto kids = children(tmp);
-            if (kids.size() == 1 && fs::is_directory(kids[0], ec) && casefold(kids[0].filename().string()) == "data") {
+            fs::path data;
+            for (const auto& k : kids)
+                if (fs::is_directory(k, ec) && casefold(k.filename().string()) == "data") data = k;
+            if (!data.empty() && (kids.size() == 1 || !looks_like_data_root(tmp))) {
                 const fs::path hop = tmp / ".mol-hop";
-                fs::rename(kids[0], hop, ec);
+                fs::rename(data, hop, ec);
                 move_children_up(hop, tmp);
                 fs::remove(hop, ec);
             }
@@ -316,8 +430,22 @@ InstallResult install_archive(const Instance& inst, std::string_view archive_s, 
         // FOMOD 的选择可以合法地「什么都不装」（例如只含可选补丁、一个都没选）：与 MO2 一致，装成空 mod。
         // 压缩包本身没有文件才是错误。
         if (res.files == 0 && !res.fomod) throw Error("invalid_argument", "the archive contains no files", archive.string());
-        fs::rename(tmp, target, ec);
-        if (ec) throw Error("io_error", "cannot move extracted files into place: " + ec.message(), target.string());
+        if (replacing) {  // 新内容齐了才换掉旧目录
+            const fs::path old = mods / (".mol-old-" + std::to_string(::getpid()));
+            fs::remove_all(old, ec);
+            fs::rename(target, old, ec);
+            if (ec) throw Error("io_error", "cannot move the old mod directory aside: " + ec.message(), target.string());
+            fs::rename(tmp, target, ec);
+            if (ec) {
+                std::error_code e2;
+                fs::rename(old, target, e2);
+                throw Error("io_error", "cannot move extracted files into place: " + ec.message(), target.string());
+            }
+            fs::remove_all(old, ec);
+        } else {
+            fs::rename(tmp, target, ec);
+            if (ec) throw Error("io_error", "cannot move extracted files into place: " + ec.message(), target.string());
+        }
         if (root) mark_mod_root(target.string(), true);
         res.root = root;
     } catch (...) {
@@ -326,6 +454,7 @@ InstallResult install_archive(const Instance& inst, std::string_view archive_s, 
     }
     res.name = string(name, mem);
     res.path = string(target.string(), mem);
+    if (listed) return res;  // 原地替换：modlist 里已有
     try {
         add_mod(inst, name, true, profile);
     } catch (...) {
