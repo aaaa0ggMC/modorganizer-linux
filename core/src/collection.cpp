@@ -17,6 +17,7 @@
 #include "mol/mod_install.hpp"
 #include "mol/parallel.hpp"
 #include "mol/plugins.hpp"
+#include "mol/reflink.hpp"
 #include "mol/xxh64.hpp"
 
 import alib6;
@@ -243,6 +244,22 @@ std::vector<std::size_t> install_order(const Collection& c) {
 
 // ---- 状态 -----------------------------------------------------------------------------
 
+std::string tool_for_generated_plugin(std::string_view plugin) {
+    static const std::pair<std::string_view, std::string_view> known[] = {
+        {"fnis.esp", "the behavior engine (Pandora Behaviour Engine, Nemesis or FNIS)"},
+        {"nemesis pcea.esp", "Nemesis"},
+        {"dyndolod.esp", "DynDOLOD (texgen + dyndolod)"},
+        {"dyndolod.esm", "DynDOLOD (texgen + dyndolod)"},
+        {"occlusion.esp", "xLODGen / DynDOLOD occlusion"},
+        {"synthesis.esp", "Synthesis"},
+        {"bashed patch, 0.esp", "Wrye Bash"},
+        {"smashed patch.esp", "Mator Smash"},
+    };
+    const std::string l = lower(plugin);
+    for (const auto& [n, t] : known) if (l == n) return std::string(t);
+    return {};
+}
+
 std::string collection_dir(const Instance& inst, std::string_view slug) {
     return (fs::path(std::string(inst.root)) / "collections" / std::string(slug)).string();
 }
@@ -334,22 +351,27 @@ std::string find_cached(const fs::path& dl, const Source& s) {
     return {};
 }
 
-// modlist 里已有的 Nexus 文件：(modid, fileid) → (mod 目录名, FOMOD 选择指纹)（来自 meta.ini 的 modid/fileid/mol_fomod）。
-using NexusIndex = std::map<std::pair<std::int64_t, std::int64_t>, std::pair<std::string, std::string>>;
-NexusIndex index_nexus_files(const Instance& inst, std::string_view profile) {
-    NexusIndex out;
-    for (const auto& md : list_mods(inst, profile)) {
-        if (md.separator || !md.exists || md.nexus_id <= 0) continue;
-        const Ini meta = Ini::load(std::string(md.path) + "/meta.ini");
-        const auto fid = meta.get("General", "fileid");
-        std::int64_t f = 0;
-        if (!fid || fid->empty()) continue;
-        for (char ch : *fid) { if (ch < '0' || ch > '9') { f = 0; break; } f = f * 10 + (ch - '0'); }
-        if (f > 0)
-            out.emplace(std::make_pair(md.nexus_id, f),
-                        std::make_pair(fs::path(std::string(md.path)).filename().string(), std::string(meta.get("General", "mol_fomod").value_or(""))));
+// 已装的 Nexus 文件：(modid, fileid) → 各个安装（mod 目录的绝对路径, FOMOD 选择指纹）。扫的是 mods/ 下的**全部**目录，
+// 不只当前 profile 的 modlist——另一个 profile / 集合装的同一个文件也能复用（同一个实例的 mods/ 本来就是共享的）。
+struct Installed {
+    std::string path, fingerprint;
+};
+using NexusIndex = std::map<std::pair<std::int64_t, std::int64_t>, std::vector<Installed>>;
+void index_mods_dir(NexusIndex& out, const fs::path& mods) {
+    std::error_code ec;
+    for (fs::directory_iterator it(mods, ec), end; !ec && it != end; it.increment(ec)) {
+        if (!it->is_directory(ec) || it->path().filename().string().starts_with(".")) continue;
+        const Ini meta = Ini::load((it->path() / "meta.ini").string());
+        auto num = [&](const char* k) -> std::int64_t {
+            const auto v = meta.get("General", k);
+            if (!v || v->empty()) return 0;
+            std::int64_t n = 0;
+            for (char ch : *v) { if (ch < '0' || ch > '9') return 0; n = n * 10 + (ch - '0'); }
+            return n;
+        };
+        const std::int64_t mid = num("modid"), fid = num("fileid");
+        if (mid > 0 && fid > 0) out[{mid, fid}].push_back({it->path().string(), std::string(meta.get("General", "mol_fomod").value_or(""))});
     }
-    return out;
 }
 
 // FOMOD 选择的指纹（写进 meta.ini 的 mol_fomod；同一个 Nexus 文件只有选择相同才复用）：
@@ -462,6 +484,46 @@ Report install_collection(const Instance& inst, const NexusClient* client, const
     std::vector<string> final_names;  // 低→高优先级
     std::size_t step = 0;
 
+    std::optional<NexusIndex> nexus_files;  // 首次用到时建：本实例 mods/ 下全部目录
+    NexusIndex other_files;                 // opt.reuse_from 里别的实例的 mods/
+    for (const auto& d : opt.reuse_from) index_mods_dir(other_files, fs::path(d));
+    // FOMOD 的 fileDependency：清单插件列表里启用的插件按 Active 算——那是策展人装完后的环境；
+    // 按安装顺序，被依赖的 mod 可能排在后面、此刻还没装上（例：Skyrim Unbound 的 Bruma 选项要 BSHeartland.esm）
+    std::set<std::string> collection_plugins;
+    for (const auto& p : c.plugins) if (p.enabled) collection_plugins.insert(lower(p.name));
+    // 清单 hashes 的复刻优先于 FOMOD 默认；用户/清单给了具体选择则按选择
+    auto replicates = [&](const Mod& m, const Override& ov) { return !m.hashes.empty() && !ov.has_choices && !m.has_choices; };
+    auto wanted_fingerprint = [&](const Mod& m, const Override& ov) {
+        if (replicates(m, ov)) return replicate_fingerprint(m.hashes);
+        const fomod::Choices* want_choices = ov.has_choices ? &ov.choices : m.has_choices ? &m.choices : nullptr;
+        return fomod_fingerprint(want_choices, ov.fomod_defaults || opt.fomod_defaults);
+    };
+    // 这个 mod 能不能直接用已有的安装（本实例任一目录 / 别的实例）：能就不必下载
+    auto compatible_fp = [&](const Mod& m, const Override& ov, const std::string& have) {
+        const std::string want = wanted_fingerprint(m, ov);
+        // 想要具体选择/复刻 → 指纹必须相同；想要默认/不需要选择 → 对方没记指纹（多半没 FOMOD）或也是默认即可
+        if (want != "defaults" && !want.empty()) return have == want;
+        return have.empty() || have == "defaults";
+    };
+    auto find_reusable = [&](const NexusIndex& idx, const Mod& m, const Override& ov) -> const Installed* {
+        if (!ov.archive.empty() || m.source.type != "nexus" || m.source.mod_id <= 0 || m.source.file_id <= 0) return nullptr;
+        const auto hit = idx.find({m.source.mod_id, m.source.file_id});
+        if (hit == idx.end()) return nullptr;
+        for (const auto& i : hit->second) if (compatible_fp(m, ov, i.fingerprint)) return &i;
+        return nullptr;
+    };
+    // 去重的参考：同一个文件的别的安装（选择不同）在前，同一个 mod 的别的版本（没改过的贴图/模型常常一字不差）在后
+    auto any_install_of = [&](const Mod& m) -> std::vector<const Installed*> {
+        std::vector<const Installed*> same_file, same_mod;
+        for (const NexusIndex* idx : {&*nexus_files, &other_files})
+            for (auto it = idx->lower_bound({m.source.mod_id, 0}); it != idx->end() && it->first.first == m.source.mod_id; ++it)
+                for (const auto& i : it->second) (it->first.second == m.source.file_id ? same_file : same_mod).push_back(&i);
+        same_file.insert(same_file.end(), same_mod.begin(), same_mod.end());
+        return same_file;
+    };
+    nexus_files = NexusIndex{};
+    index_mods_dir(*nexus_files, fs::path(std::string(inst.mods_dir)));
+
     // ---- 预取阶段：把需要联网下载的压缩包并行下完（安装仍按顺序串行进行）----
     std::map<std::string, std::string> cached;    // key → 本地已有的压缩包（不需要下载）
     std::map<std::string, Fetched> fetched;       // key → 并行下载的结果
@@ -485,6 +547,7 @@ Report install_collection(const Instance& inst, const NexusClient* client, const
             }
             if (!ov.archive.empty()) { have += size_of(m); continue; }
             if (m.has_patches) continue;
+            if (!ov.reinstall && (find_reusable(*nexus_files, m, ov) || find_reusable(other_files, m, ov))) { have += size_of(m); continue; }  // 不用下载
             if (sit != state.mods.end() && !sit->second.archive.empty() && fs::is_regular_file(sit->second.archive, ec)) { have += size_of(m); continue; }
             if (auto p = find_cached(downloads, m.source); !p.empty()) { cached[key] = p; have += size_of(m); continue; }
             if (client && (m.source.type == "nexus" || (m.source.type == "direct" && !m.source.url.empty()))) todo.push_back(idx);
@@ -511,18 +574,6 @@ Report install_collection(const Instance& inst, const NexusClient* client, const
         }
     }
 
-    std::optional<NexusIndex> nexus_files;  // 首次用到时建
-    // FOMOD 的 fileDependency：清单插件列表里启用的插件按 Active 算——那是策展人装完后的环境；
-    // 按安装顺序，被依赖的 mod 可能排在后面、此刻还没装上（例：Skyrim Unbound 的 Bruma 选项要 BSHeartland.esm）
-    std::set<std::string> collection_plugins;
-    for (const auto& p : c.plugins) if (p.enabled) collection_plugins.insert(lower(p.name));
-    // 清单 hashes 的复刻优先于 FOMOD 默认；用户/清单给了具体选择则按选择
-    auto replicates = [&](const Mod& m, const Override& ov) { return !m.hashes.empty() && !ov.has_choices && !m.has_choices; };
-    auto wanted_fingerprint = [&](const Mod& m, const Override& ov) {
-        if (replicates(m, ov)) return replicate_fingerprint(m.hashes);
-        const fomod::Choices* want_choices = ov.has_choices ? &ov.choices : m.has_choices ? &m.choices : nullptr;
-        return fomod_fingerprint(want_choices, ov.fomod_defaults || opt.fomod_defaults);
-    };
     for (const std::size_t idx : order) {
         const Mod& m = c.mods[idx];
         const std::string key = m.key();
@@ -606,17 +657,10 @@ Report install_collection(const Instance& inst, const NexusClient* client, const
         }
 
         // 同一个 Nexus 文件已经装在实例里（另一个集合、`nexus install` 或 MO2 装的，meta.ini 的 modid/fileid 一致）→ 复用，不再装一份
-        if (!reinstall && ov.archive.empty() && m.source.type == "nexus" && m.source.mod_id > 0 && m.source.file_id > 0) {
-            if (!nexus_files) nexus_files = index_nexus_files(inst, profile);
-            // 选择不同就不复用（否则两个集合/两个 profile 选了不同 FOMOD 选项会串味）：
-            // 想要具体选择/复刻 → 指纹必须相同；想要默认/不需要选择 → 对方没记指纹（多半没 FOMOD）或也是默认即可
-            const std::string want = wanted_fingerprint(m, ov);
-            const auto compatible = [&](const std::string& have) {
-                if (want != "defaults" && !want.empty()) return have == want;
-                return have.empty() || have == "defaults";
-            };
-            if (auto hit = nexus_files->find({m.source.mod_id, m.source.file_id}); hit != nexus_files->end() && compatible(hit->second.second)) {
-                const std::string dir = hit->second.first;
+        // 选择不同就不复用（否则两个集合/两个 profile 选了不同 FOMOD 选项会串味）
+        if (!reinstall) {
+            if (const Installed* hit = find_reusable(*nexus_files, m, ov)) {
+                const std::string dir = fs::path(hit->path).filename().string();
                 ms.status = "installed";
                 ms.mod_dir = dir;
                 ms.note = "already installed (same Nexus file)";
@@ -624,9 +668,31 @@ Report install_collection(const Instance& inst, const NexusClient* client, const
                 out.mod_dir = dir;
                 out.note = ms.note;
                 ++rep.installed;
+                ++rep.reused;
                 final_names.emplace_back(dir);
                 finish();
                 continue;
+            }
+            // 别的实例里有：reflink 整个目录过来（同一个支持 reflink 的文件系统上瞬间完成、不占空间；否则照常安装）
+            if (const Installed* hit = find_reusable(other_files, m, ov)) {
+                std::string dir = ms.mod_dir.empty() ? m.name : ms.mod_dir;
+                if (ms.mod_dir.empty() && mod_name_taken(inst, dir, profile)) dir += " [" + (m.source.tag.empty() ? std::to_string(idx) : m.source.tag) + "]";
+                dir = sanitize_mod_name(dir);
+                const fs::path target = fs::path(std::string(inst.mods_dir)) / dir;
+                if (!fs::exists(fs::symlink_status(target, ec)) && reflink_tree(hit->path, target)) {
+                    nexus_files->operator[]({m.source.mod_id, m.source.file_id}).push_back({target.string(), hit->fingerprint});
+                    ms.status = "installed";
+                    ms.mod_dir = dir;
+                    ms.note = "reflinked from " + hit->path;
+                    out.status = "installed";
+                    out.mod_dir = dir;
+                    out.note = ms.note;
+                    ++rep.installed;
+                    ++rep.reflinked;
+                    final_names.emplace_back(dir);
+                    finish();
+                    continue;
+                }
             }
         }
 
@@ -728,9 +794,20 @@ Report install_collection(const Instance& inst, const NexusClient* client, const
                 if (io.fomod == FomodMode::Replicate) set_mod_meta(md, "mol_fomod", replicate_fingerprint(io.replicate));
                 else if (res.fomod) set_mod_meta(md, "mol_fomod", fomod_fingerprint(io.fomod == FomodMode::Choices ? &io.choices : nullptr, io.fomod == FomodMode::Defaults));
             }
-            if (reinstall) {
+            if (reinstall)
                 if (auto it = state.overrides.find(key); it != state.overrides.end()) it->second.reinstall = false;
-                nexus_files.reset();  // 目录内容/指纹变了
+            // 同一个文件的别的安装（选择不同）：内容相同的文件改成共享数据块
+            if (m.source.type == "nexus" && m.source.mod_id > 0) {
+                for (const Installed* other : any_install_of(m)) {
+                    if (fs::path(other->path) == fs::path(std::string(res.path))) continue;
+                    const DedupeStats ds = dedupe_tree(fs::path(std::string(res.path)), fs::path(other->path));
+                    rep.deduped_files += ds.files;
+                    rep.deduped_bytes += ds.bytes;
+                    if (ds.files) break;  // 一个参考够了（再对别的参考去重会重复计数）
+                }
+                auto& v = (*nexus_files)[{m.source.mod_id, m.source.file_id}];
+                std::erase_if(v, [&](const Installed& i) { return fs::path(i.path) == fs::path(std::string(res.path)); });
+                v.push_back({std::string(res.path), std::string(Ini::load(std::string(res.path) + "/meta.ini").get("General", "mol_fomod").value_or(""))});
             }
             if (io.fomod == FomodMode::Replicate && !res.missing.empty()) {
                 std::string miss;
@@ -765,17 +842,28 @@ Report install_collection(const Instance& inst, const NexusClient* client, const
         finish();
     }
 
+    if (rep.reused || rep.reflinked || rep.deduped_files) {
+        char mb[32];
+        std::snprintf(mb, sizeof mb, "%.1f MiB", static_cast<double>(rep.deduped_bytes) / (1024.0 * 1024.0));
+        rep.notes.push_back("reuse: " + std::to_string(rep.reused) + " mod(s) already installed in this instance, " + std::to_string(rep.reflinked) +
+                            " reflinked from another instance, " + std::to_string(rep.deduped_files) + " file(s) / " + mb + " shared with other installs of the same archive");
+    }
     // 4) 优先级：按安装顺序放到 modlist 最高处
     if (!final_names.empty()) reorder_mods(inst, final_names, profile);
     // 5) 插件列表
     if (c.has_plugins) {
         std::vector<std::string> missing;
         rep.plugins_applied = apply_plugin_spec(inst, c, profile, {}, &missing);
-        if (!missing.empty()) {
+        // 工具生成的插件：策展人跑过工具，清单只带了工具本身——缺它们不是装坏了，而是要跑一次工具
+        std::vector<std::string> generated, really;
+        for (const auto& p : missing) (tool_for_generated_plugin(p).empty() ? really : generated).push_back(p);
+        for (const auto& p : generated)
+            rep.notes.push_back(p + " is generated by a tool, not shipped by any mod: run " + tool_for_generated_plugin(p) + " once (`executables list`, then `run --exe …`)");
+        if (!really.empty()) {
             std::string list;
-            for (std::size_t i = 0; i < missing.size() && i < 8; ++i) list += (i ? ", " : "") + missing[i];
-            if (missing.size() > 8) list += ", …";
-            rep.notes.push_back(std::to_string(missing.size()) + " plugin(s) the collection enables are not installed (" + list +
+            for (std::size_t i = 0; i < really.size() && i < 8; ++i) list += (i ? ", " : "") + really[i];
+            if (really.size() > 8) list += ", …";
+            rep.notes.push_back(std::to_string(really.size()) + " plugin(s) the collection enables are not installed (" + list +
                                 "): a mod was installed incompletely; `collection verify` finds which, `mods find NAME --archives` where the file is");
         }
     }
@@ -849,8 +937,10 @@ VerifyReport verify_collection(const Instance& inst, const Collection& c, const 
             ++rep.checked;
             for (const auto& e : expected) if (!actual.count(e)) item.missing.push_back(e);  // 复刻只看「该有的在不在」
         } else {
-            const std::string archive = sit->second.archive;
-            if (archive.empty() || !fs::is_regular_file(archive, ec)) { ++rep.skipped; continue; }
+            std::string archive = sit->second.archive;
+            // reflink 过来 / 复用的 mod 没记压缩包：按大小 + md5 在下载目录里找
+            if (archive.empty() || !fs::is_regular_file(archive, ec)) archive = find_cached(fs::path(std::string(inst.downloads_dir)), m.source);
+            if (archive.empty()) { ++rep.skipped; continue; }
             std::optional<fomod::Config> cfg;
             std::vector<std::string> names;
             try {

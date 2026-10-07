@@ -108,7 +108,9 @@ struct State {
     std::map<std::string, Override> overrides;
 };
 
-std::string collection_dir(const Instance& inst, std::string_view slug);  // <实例>/collections/<slug>
+std::string collection_dir(const Instance& inst, std::string_view slug);
+// 由工具生成、不由任何 mod 提供的插件（FNIS.esp → 行为引擎、DynDOLOD.esp、Synthesis.esp……）：该跑的工具；不认识返回空。
+std::string tool_for_generated_plugin(std::string_view plugin);  // <实例>/collections/<slug>
 State load_state(const Instance& inst, std::string_view slug);            // 不存在 → 空 State
 void save_state(const Instance& inst, const State& s);
 
@@ -126,6 +128,9 @@ struct Report {
     bool complete() const { return pending.empty() && failed == 0; }
     std::size_t plugins_applied = 0;
     std::vector<std::string> notes;  // 非致命提示（规则、游戏版本不一致……）
+    // 复用：直接用了实例里已有的目录 / 从别的实例 reflink 过来的目录 / 安装后与已有安装去重的文件与字节
+    std::size_t reused = 0, reflinked = 0, deduped_files = 0;
+    std::uint64_t deduped_bytes = 0;
 };
 
 struct InstallOptions {
@@ -133,6 +138,9 @@ struct InstallOptions {
     bool include_optional = true;
     bool fomod_defaults = false;     // 清单没给选择的 FOMOD 一律用默认
     unsigned jobs = 0;               // 并行下载数（0 = MOL_JOBS 环境变量或默认 4）
+    // 别的实例的 mods/ 目录：同一个 Nexus 文件、同样的 FOMOD 选择已经装在那里 → reflink 整个目录过来（btrfs/xfs 上瞬间、不占空间）；
+    // 选择不同就照常安装，再与那边的同名文件去重。
+    std::vector<std::string> reuse_from;
     // 进度回调：stage ∈ "download"（所有并行下载的合计字节，mod 名为空）| "downloaded"（第几个下载完）| "install"（第几个 mod）。返回 false 中止（未实现取消时可忽略）。
     std::function<void(std::string_view stage, std::string_view mod, std::uint64_t done, std::uint64_t total)> progress;
 };

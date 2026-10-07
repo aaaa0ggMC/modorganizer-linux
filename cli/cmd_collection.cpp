@@ -433,6 +433,18 @@ Result run_collection_install(Context& ctx) {
         opt.profile = std::string(ctx.profile_override());
         opt.include_optional = !ctx.args.get_bool("--no-optional", false);
         opt.fomod_defaults = ctx.args.get_bool("--fomod-defaults", false);
+        if (ctx.args.has("--reuse-from")) {
+            const std::string list(ctx.args.get("--reuse-from", "", ctx.mem));
+            for (std::size_t b = 0; b <= list.size();) {
+                std::size_t e = list.find(',', b);
+                if (e == std::string::npos) e = list.size();
+                if (e > b) {
+                    const auto other = mol::load_instance(list.substr(b, e - b), {}, ctx.mem);  // 不是实例 → instance_not_found
+                    opt.reuse_from.emplace_back(other.mods_dir);
+                }
+                b = e + 1;
+            }
+        }
         if (ctx.args.has("--jobs")) {
             std::int64_t j = 0;
             if (!parse_int(ctx.args.get("--jobs", "", ctx.mem), j) || j < 1) return make_usage_error("collection install: --jobs needs an integer >= 1", ctx);
@@ -519,7 +531,8 @@ Result run_collection_status(Context& ctx) {
 
 Result run_collection_verify(Context& ctx) {
     if (!ctx.args.ok()) return make_usage_error(ctx.args.error, ctx);
-    const auto inst = mol::load_instance(ctx.instance_dir, ctx.profile_override(), ctx.mem);
+    auto inst = mol::load_instance(ctx.instance_dir, ctx.profile_override(), ctx.mem);
+    if (ctx.args.has("--downloads")) inst.downloads_dir = mol::string(ctx.args.get("--downloads", "", ctx.mem), ctx.mem);
     const Ref ref = parse_ref(ctx.args.positionals.front(), inst);
     const Loaded l = load_cached(inst, ref.slug);
     col::State st = col::load_state(inst, ref.slug);
