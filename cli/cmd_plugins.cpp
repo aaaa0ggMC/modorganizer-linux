@@ -5,6 +5,7 @@
 #include "mol/game_host.hpp"
 #include "mol/instance.hpp"
 #include "mol/loot.hpp"
+#include "mol/overwrite.hpp"
 #include "mol/plugins.hpp"
 #include "mol/plugins_sync.hpp"
 
@@ -109,6 +110,16 @@ Result run_plugins_move(Context& ctx) {
     const bool changed = mol::plugin_move(list, ctx.args.positionals.front(), to);
     mol::save_plugins(inst, list, ctx.profile_override());
     return finish(ctx, inst, list, changed);
+}
+
+Result run_plugins_restore(Context& ctx) {
+    const auto inst = mol::load_instance(ctx.instance_dir, ctx.profile_override(), ctx.mem);
+    mol::require_farm_idle(inst);
+    if (!mol::restore_plugins_snapshot(inst, ctx.profile_override()))
+        throw mol::Error("mod_not_found", "no plugins.txt.mol-last-good in this profile yet (mo-linux has not written the list since this feature was added)");
+    auto list = mol::load_plugins(inst, forced_list(ctx, inst), ctx.profile_override(), ctx.mem);
+    mol::save_plugins(inst, list, ctx.profile_override());
+    return finish(ctx, inst, list, true, "masters", 0, 0);
 }
 
 Result run_plugins_sort(Context& ctx) {

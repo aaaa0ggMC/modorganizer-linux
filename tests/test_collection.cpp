@@ -641,3 +641,49 @@ TEST(vortex_enb_and_dinput_mods_deploy_to_the_game_folder) {
     CHECK(install_collection(inst, nullptr, with_type("enb"), st2, {}, {}).complete());
     CHECK(slurp(t.dir / "inst/mods" / st2.mods["p"].mod_dir / "meta.ini").find("mol_root=true") != std::string::npos);
 }
+
+TEST(verify_finds_fomod_mods_whose_files_no_longer_match_and_absent_plugins) {
+    if (!have_zip()) return;
+    Tmp t;
+    // FOMOD：选 A（a.esp + textures/a.dds）；B 选项带一个策展人列表里没有的插件
+    fs::create_directories(t.dir / "src/vf/fomod");
+    std::ofstream(t.dir / "src/vf/fomod/ModuleConfig.xml") << R"(<?xml version="1.0"?><config><installSteps order="Explicit">
+<installStep name="S"><optionalFileGroups><group name="G" type="SelectAny"><plugins order="Explicit">
+<plugin name="A"><files><folder source="opt a" destination=""/></files><typeDescriptor><type name="Optional"/></typeDescriptor></plugin>
+<plugin name="B"><files><file source="extra.esp" destination="extra.esp"/></files><typeDescriptor><type name="Optional"/></typeDescriptor></plugin>
+</plugins></group></optionalFileGroups></installStep></installSteps></config>)";
+    put(t.dir / "src/vf/opt a/a.esp", "A");
+    put(t.dir / "src/vf/opt a/textures/a.dds", "T");
+    put(t.dir / "src/vf/extra.esp", "E");
+    fs::create_directories(t.dir / "inst/downloads");
+    zip_dir(t.dir / "src/vf", t.dir / "inst/downloads/vf.zip");
+    const std::string md5 = md5_file((t.dir / "inst/downloads/vf.zip").string());
+    const auto sz = fs::file_size(t.dir / "inst/downloads/vf.zip");
+    const Collection coll = parse_collection(R"({"info":{"name":"C","domainName":"skyrimspecialedition"},"mods":[{"name":"VF","version":"1","optional":false,"source":{"type":"nexus","modId":7,"fileId":8,"fileSize":)" +
+        std::to_string(sz) + R"(,"md5":")" + md5 + R"(","tag":"vf"},"choices":{"type":"fomod","options":[{"name":"S","groups":[{"name":"G","choices":[{"name":"A","idx":0},{"name":"B","idx":1}]}]}]}}],
+        "modRules":[],"plugins":[{"name":"a.esp","enabled":true},{"name":"Absent.esp","enabled":true}]})");
+    Instance inst = tmp_instance(t.dir);
+    State st;
+    st.slug = "c";
+    const Report r = install_collection(inst, nullptr, coll, st, {}, {});
+    CHECK(r.complete());
+    bool noted = false;
+    for (const auto& n : r.notes) if (n.find("Absent.esp") != std::string::npos) noted = true;
+    CHECK(noted);  // 清单启用、却没有装上的插件
+    const fs::path dir = t.dir / "inst/mods" / st.mods["vf"].mod_dir;
+    CHECK(fs::exists(dir / "textures/a.dds"));
+
+    auto v = verify_collection(inst, coll, st);
+    CHECK_EQ(v.checked, std::size_t{1});
+    CHECK(v.mismatched.empty());  // extra.esp 装上了（选了 B），它不在策展人列表里也不算问题
+    CHECK_EQ(v.missing_plugins.size(), std::size_t{1});
+
+    fs::remove(dir / "textures/a.dds");  // 模拟旧版本少装了文件
+    fs::remove(dir / "extra.esp");       // 策展人列表里没有的插件缺了：不算
+    v = verify_collection(inst, coll, st);
+    CHECK_EQ(v.mismatched.size(), std::size_t{1});
+    if (!v.mismatched.empty()) {
+        CHECK_EQ(v.mismatched[0].missing.size(), std::size_t{1});
+        CHECK_EQ(v.mismatched[0].missing[0], std::string("textures/a.dds"));
+    }
+}

@@ -4,7 +4,11 @@
 // 退出后改过的副本收进 overwrite（Data/ 下）或 overwrite-root（根目录，作为最高层参与合并）。
 // 游戏层库（Qt）只在启动游戏本体时必需；其它工具（降级补丁、BodySlide……）没有它也能跑，只是不同步 plugins.txt。
 // 混用约束：所有 #include 在 import 之前（详见 cli/cmd_common.hpp 文件头）。
+#include <chrono>
+#include <ctime>
+#include <filesystem>
 #include <fstream>
+#include <thread>
 #include <optional>
 
 #include "mol/casefold.hpp"
@@ -16,6 +20,7 @@
 #include "mol/plugins.hpp"
 #include "mol/plugins_sync.hpp"
 #include "mol/runner.hpp"
+#include "mol/terminate.hpp"
 
 #include "commands.hpp"
 
@@ -33,6 +38,8 @@ Result run_run(Context& ctx) {
     const mol::string title = ctx.args.get("--title", "", ctx.mem);
     if (!title.empty() && !exe.empty()) return make_usage_error("run: --title and --exe are mutually exclusive", ctx);
     if (!title.empty() && skse) return make_usage_error("run: --title and --skse are mutually exclusive", ctx);
+    const bool diagnose = ctx.args.get_bool("--diagnose", false);
+    if (diagnose && detach) return make_usage_error("run: --diagnose waits for the game to exit; it cannot be combined with --detach", ctx);
     if (exe.empty() && title.empty()) exe = skse ? "skse64_loader.exe" : "SkyrimSE.exe";
 
     const mol::Instance inst = mol::load_instance(ctx.instance_dir, ctx.profile_override(), ctx.mem);
@@ -61,9 +68,19 @@ Result run_run(Context& ctx) {
     if (is_game && !dry && !ctx.args.get_bool("--force", false)) {
         namespace h = mol::health;
         std::string why, fix;
-        if (inst.cfg.runner_kind == "proton" && !h::steam_client_running(inst.cfg.steam_root)) {
-            why = "the Steam client is not running: the game would fail SteamAPI_Init and ask Steam to start its own copy of the game (no mods, no copy-on-write)";
+        bool steam_ok = inst.cfg.runner_kind != "proton" || h::steam_client_running(inst.cfg.steam_root);
+        if (!steam_ok && !ctx.args.get_bool("--no-start-steam", false)) {
+            if (!(ctx.globals && ctx.globals->quiet)) std::fprintf(stderr, "run: the Steam client is not running; starting it and waiting for it to log in…\n");
+            steam_ok = h::start_steam_and_wait(inst.cfg.steam_root);
+        }
+        if (!steam_ok) {
+            why = "the Steam client is not running (or did not log in within 2 minutes): the game would fail SteamAPI_Init and ask Steam to start its own copy of the game (no mods, no copy-on-write)";
             fix = "";
+        } else if (const auto lost = mol::plugins_lost_since_snapshot(inst, ctx.profile_override(), ctx.mem); !lost.empty()) {
+            // 不拦的话，下面的 save_plugins 会把被改坏的列表当成新的「最后一次写的」
+            why = std::to_string(lost.size()) + " plugin(s) were disabled behind mo-linux's back (e.g. " + std::string(lost.front()) +
+                  "): the game rewrote plugins.txt";
+            fix = "plugins restore";
         } else if (const auto rt = h::vc_runtime(inst); !h::vc_runtime_ok(rt)) {
             why = "the prefix's VC++ runtime is " + (rt.front().version.empty() ? std::string("missing") : rt.front().version) + "; most SKSE plugins need 14.40+ and fail to load";
             fix = "fix vcrun";
@@ -126,13 +143,62 @@ Result run_run(Context& ctx) {
     lo.cow_library = cow_lib;
     lo.cow_log = cow_log;
     mol::LaunchSpec spec = mol::build_launch(inst, exe, lo, ctx.mem);
+    std::string log_dir;
+    if (diagnose) {
+        if (inst.cfg.runner_kind != "proton") return make_usage_error("run: --diagnose needs the proton runner", ctx);
+        const auto now = std::chrono::system_clock::to_time_t(std::chrono::system_clock::now());
+        char stamp[32];
+        std::tm tm{};
+        localtime_r(&now, &tm);
+        std::strftime(stamp, sizeof stamp, "%Y%m%d-%H%M%S", &tm);
+        log_dir = std::string(inst.root) + "/logs/diagnose-" + stamp;
+        std::error_code ec;
+        std::filesystem::create_directories(log_dir, ec);
+        spec.env.emplace_back(mol::string("PROTON_LOG", ctx.mem), mol::string("1", ctx.mem));
+        spec.env.emplace_back(mol::string("PROTON_LOG_DIR", ctx.mem), mol::string(log_dir, ctx.mem));
+        spec.env.emplace_back(mol::string("WINEDEBUG", ctx.mem), mol::string("+seh,+loaddll", ctx.mem));
+    }
+    if (detach || diagnose) {  // 后台的游戏输出进日志文件，不占调用方的管道
+        if (log_dir.empty()) {
+            const auto now = std::chrono::system_clock::to_time_t(std::chrono::system_clock::now());
+            char stamp[32];
+            std::tm tm{};
+            localtime_r(&now, &tm);
+            std::strftime(stamp, sizeof stamp, "%Y%m%d-%H%M%S", &tm);
+            std::error_code ec;
+            std::filesystem::create_directories(std::string(inst.root) + "/logs", ec);
+            spec.log_file = mol::string(std::string(inst.root) + "/logs/run-" + stamp + ".log", ctx.mem);
+        } else {
+            spec.log_file = mol::string(log_dir + "/game-output.log", ctx.mem);
+        }
+    }
+    const auto started = std::filesystem::file_time_type::clock::now();
     int game_exit = 0;
     std::size_t captured_after = 0;
     mol::CowStats cow;
     if (!dry) {
         if (game && !game->about_to_run(exe)) throw mol::Error("game_unavailable", "an onAboutToRun handler refused to run", std::string(exe));
         mol::ensure_wineserver_cow(inst, cow_lib);
-        game_exit = mol::spawn_launch(spec, !detach);
+        if (diagnose) {
+            // 等的是 SkyrimSE.exe 本身：skse64_loader.exe 拉起游戏后自己就退出；游戏崩溃后 CrashLogger 会开一个
+            // notepad 显示日志，它让 Proton 一直不返回——游戏进程没了就开始诊断，不等那个窗口
+            if (!(ctx.globals && ctx.globals->quiet)) std::fprintf(stderr, "run --diagnose: waiting for the game to exit…\n");
+            mol::spawn_launch(spec, false);
+            const auto t0 = std::chrono::steady_clock::now();
+            bool seen = false;
+            while (true) {
+                std::this_thread::sleep_for(std::chrono::seconds(1));
+                bool running = false;
+                for (const auto& p : mol::instance_processes(inst))
+                    if (mol::casefold(p.command).find("skyrimse.exe") != std::string::npos) running = true;
+                seen = seen || running;
+                if (seen && !running) break;
+                if (!seen && std::chrono::steady_clock::now() - t0 > std::chrono::seconds(90) && !mol::farm_in_use(inst)) break;  // 根本没起来
+            }
+            std::this_thread::sleep_for(std::chrono::seconds(3));  // 让崩溃日志 / Proton 日志写完
+        } else {
+            game_exit = mol::spawn_launch(spec, !detach);
+        }
         if (!detach) {
             cow = mol::cow_stats(inst);
             captured_after = mol::capture_overwrite(inst);
@@ -153,6 +219,44 @@ Result run_run(Context& ctx) {
               .cow_copies = cow.copies,
               .cow_reflinked = cow.reflinked};
     for (const auto& a : spec.argv) d.argv.push_back(std::pmr::string(a, ctx.mem));
+    if (diagnose && !dry) {
+        namespace h = mol::health;
+        d.log_file = std::pmr::string(log_dir + "/steam-489830.log", ctx.mem);
+        auto say = [&](const std::string& s) { d.diagnosis.push_back(std::pmr::string(s, ctx.mem)); };
+        std::ifstream in(std::string(d.log_file), std::ios::binary);
+        const std::string text((std::istreambuf_iterator<char>(in)), std::istreambuf_iterator<char>());
+        if (text.empty()) say("no Proton log was written (" + std::string(d.log_file) + ")");
+        const auto cr = h::latest_crash(inst);
+        const bool crashed = !cr.file.empty() && cr.mtime >= started;
+        if (crashed) {
+            say("the game crashed; CrashLogger wrote " + cr.file);
+            for (const auto& l : h::crash_summary_lines(cr)) say("  " + l);
+        }
+        const auto pd = h::parse_proton_log(text);
+        if (pd.last) {
+            say("last notable exception: " + h::describe_exception_code(pd.last->code) + " (0x" + pd.last->code + ")" +
+                (pd.last->module.empty() ? std::string() : " raised in " + pd.last->module));
+            std::string all;
+            for (const auto& [c, n] : pd.codes) all += (all.empty() ? "" : ", ") + c + " x" + std::to_string(n);
+            say("notable exception codes: " + all + (crashed ? " (a modded game raises many of these normally; the crash log above is the reliable part)" : ""));
+            if (pd.last->code == "e06d7363" && mol::casefold(pd.last->module).starts_with("msvcp140"))
+                say("hint: a C++ exception from MSVCP140 right after start is typical of an unreadable ContentCatalog.txt (`fix content-catalog`) or an old VC++ runtime (`fix vcrun`)");
+        } else if (!text.empty()) {
+            say("no notable exception in the Proton log (the game exited on its own)");
+        }
+        if (!pd.gpu_used.empty()) {
+            say("GPU: " + pd.gpu_used + (pd.gpus.size() > 1 ? " (" + std::to_string(pd.gpus.size()) + " adapters found)" : ""));
+            if (const std::string dg = h::discrete_gpu_unused(pd); !dg.empty())
+                say("hint: the game ran on the integrated GPU although '" + dg + "' is present; force it with DXVK_FILTER_DEVICE_NAME=\"" + dg +
+                    "\" (NVIDIA hybrid laptops also need __NV_PRIME_RENDER_OFFLOAD=1 __GLX_VENDOR_LIBRARY_NAME=nvidia) in the environment of `mo-linux run`");
+        }
+        const auto sl = h::read_skse_log(inst);
+        if (sl.found && sl.mtime >= started)
+            say(std::to_string(sl.loaded) + " SKSE plugin(s) loaded, " + std::to_string(sl.failed.size()) + " failed" +
+                (sl.failed.empty() ? std::string() : " (" + sl.failed.front() + (sl.failed.size() > 1 ? ", …" : "") + ")"));
+        else
+            say("SKSE did not write a log this run (the game ended before SKSE loaded, or it was not started through SKSE)");
+    }
     Result r(ctx.mem);
     r.ok = true;
     r.exit_code = 0;

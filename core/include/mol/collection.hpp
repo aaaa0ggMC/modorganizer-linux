@@ -142,7 +142,26 @@ struct InstallOptions {
 Report install_collection(const Instance& inst, const NexusClient* client, const Collection& c, State& state,
                           const InstallOptions& opt, std::string_view game_version = {});
 
+// ---- 校验已装的 mod（P0-2）--------------------------------------------------------------
+// 用**当前的**安装逻辑重新算每个已装 mod 应有的文件，与磁盘对比（不解压、不改任何东西）：
+//   * 清单给了 FOMOD 选择的：读压缩包里的 FOMOD 配置 + 压缩包目录，按选择算出目标文件集合；
+//   * 按 hashes 复刻的：清单列出的每个文件都应在。
+// 只比较文件路径集合（大小写不敏感），不比内容。用来发现「旧版本按别的逻辑装的、指纹没变所以不会自动重装」的 mod。
+struct VerifyItem {
+    std::string key, name, mod_dir, kind;      // kind: fomod | replicate
+    std::vector<std::string> missing, extra;   // 应有却没有 / 有却不应有（相对 mod 根）
+};
+struct VerifyReport {
+    std::size_t checked = 0, skipped = 0;      // skipped：没有压缩包、读不了 FOMOD……
+    std::vector<VerifyItem> mismatched;
+    std::vector<std::string> missing_plugins;  // 清单插件列表里启用、磁盘上（任何 mod / 游戏 Data）都没有的
+};
+VerifyReport verify_collection(const Instance& inst, const Collection& c, const State& state, std::string_view profile = {},
+                               const std::function<void(std::size_t done, std::size_t total, std::string_view name)>& progress = {});
+
 // 应用清单的插件列表到 profile 的 plugins.txt/loadorder.txt（只处理磁盘上存在的插件）。返回处理的插件数。
-std::size_t apply_plugin_spec(const Instance& inst, const Collection& c, std::string_view profile, std::span<const string> forced = {});
+// missing（可空）：清单里启用、磁盘上却没有的插件——某个 mod 没装全（FOMOD 条件、hashes 不完整……）。
+std::size_t apply_plugin_spec(const Instance& inst, const Collection& c, std::string_view profile, std::span<const string> forced = {},
+                              std::vector<std::string>* missing = nullptr);
 
 }  // namespace mol::collection

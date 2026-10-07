@@ -14,10 +14,13 @@ struct LaunchSpec {
     vector<string> argv;
     vector<std::pair<string, string>> env;  // 要在继承的环境之上覆盖/追加的变量
     string cwd;
+    // 子进程的 stdout/stderr 写到这里（追加）。空：等待模式下继承 stderr（stdout 也指向它）；
+    // 后台模式下丢到 /dev/null——绝不能继承调用方的管道，否则游戏活多久、调用方读管道就卡多久。
+    string log_file;
 
-    explicit LaunchSpec(allocator_type a = {}) : argv(a), env(a), cwd(a) {}
-    LaunchSpec(const LaunchSpec& o, allocator_type a) : argv(o.argv, a), env(o.env, a), cwd(o.cwd, a) {}
-    LaunchSpec(LaunchSpec&& o, allocator_type a) : argv(std::move(o.argv), a), env(std::move(o.env), a), cwd(std::move(o.cwd), a) {}
+    explicit LaunchSpec(allocator_type a = {}) : argv(a), env(a), cwd(a), log_file(a) {}
+    LaunchSpec(const LaunchSpec& o, allocator_type a) : argv(o.argv, a), env(o.env, a), cwd(o.cwd, a), log_file(o.log_file, a) {}
+    LaunchSpec(LaunchSpec&& o, allocator_type a) : argv(std::move(o.argv), a), env(std::move(o.env), a), cwd(std::move(o.cwd), a), log_file(std::move(o.log_file), a) {}
     LaunchSpec(const LaunchSpec&) = default;
     LaunchSpec(LaunchSpec&&) = default;
     LaunchSpec& operator=(const LaunchSpec&) = default;
@@ -55,7 +58,7 @@ LaunchSpec build_launch(const Instance& inst, std::string_view exe_rel, const La
                         mr* mem = default_mr());
 
 // 以子进程运行 spec（继承当前环境并叠加 spec.env）。wait=true 阻塞并返回退出码；
-// wait=false 立即返回 0（子进程脱离，不成为僵尸）。fork/exec 失败抛 Error{io_error}。
+// wait=false 立即返回 0（子进程脱离，不成为僵尸；stdin/stdout/stderr 都不与调用方共享，见 LaunchSpec::log_file）。fork/exec 失败抛 Error{io_error}。
 int spawn_launch(const LaunchSpec& spec, bool wait);
 
 }  // namespace mol

@@ -46,6 +46,9 @@ constexpr std::string_view kVcRedistUrl = "https://aka.ms/vs/17/release/vc_redis
 // 不在运行时启动游戏：SteamAPI_Init 失败，游戏（Steam DRM）发出 steam://run/489830 让 Steam 重新拉起
 // Steam 库里的那份游戏——不经过 mo-linux（没有 mod、没有 COW），还会把 ContentCatalog.txt 写坏。
 bool steam_client_running(std::string_view steam_root);
+// 启动 Steam 客户端（PATH 里的 steam，否则 <steam_root>/steam.sh；-silent，脱离本进程）并等到它登录完成
+// （<steam_root>/logs/connection_log.txt 在启动后新出现 "[Logged On"）。超时返回 false（Steam 可能在等人输密码）。
+bool start_steam_and_wait(std::string_view steam_root, int timeout_ms = 120000);
 
 // ---- D4b 大小写影子 ------------------------------------------------------------------------
 // AppData 里 plugins.txt / loadorder.txt 旁边只差大小写的同名条目（Wine 会优先打开大小写一致的那个，
@@ -63,11 +66,58 @@ struct SkseLog {
 SkseLog parse_skse_log(std::string_view text);
 SkseLog read_skse_log(const Instance& inst);  // <My Games>/SKSE/skse64.log
 
+// ---- D7 崩溃与启动诊断 ---------------------------------------------------------------------
+struct CrashSummary {
+    std::string file;                     // 完整路径；空 = 没有
+    std::filesystem::file_time_type mtime{};
+    std::string exception;                // "Unhandled exception "EXCEPTION_ACCESS_VIOLATION" at 0x… SkyrimSE.exe+…"
+    std::string cxx_type, cxx_info;       // C++ 异常：Type / Info（如 std::invalid_argument* / invalid stoull argument）
+    std::vector<std::string> modules;     // 调用栈前几帧（[P]robable）涉及的模块（去重，按出现顺序）
+    std::string first_own_frame;          // 第一个不是系统/运行库 dll 的帧，如 "SkyrimSE.exe+1235AE9"、"SomePlugin.dll+00ABCDE"
+    std::vector<std::string> files;       // 栈上出现的文件名（.txt/.ini/.esp/.esm/.esl/.dll/.nif/.dds/.pex …，去重）
+    std::vector<std::string> plugins;     // POSSIBLE RELEVANT OBJECTS 里提到的插件
+    std::string hint;                     // 认得出的已知原因 → 建议（如 ContentCatalog.txt → `fix content-catalog`）
+};
+// CrashLogger 的 crash-*.log（v1.x 的 "PROBABLE CALL STACK:" 与 v1.2x 的 "CALL STACK ([P]robable / [S]tack scan):" 都认）。
+CrashSummary parse_crash_log(std::string_view text);
+// <My Games>/SKSE 下最新的 crash-*.log（已解析）；没有则 file 为空。
+CrashSummary latest_crash(const Instance& inst);
+
+struct ProtonException {
+    std::string code;    // 十六进制，如 "e06d7363"、"c0000005"
+    std::string module;  // 抛出/出错的模块（按加载基址推出）；推不出为空
+    std::string thread;
+};
+struct ProtonDiagnosis {
+    std::vector<std::pair<std::string, std::size_t>> codes;  // 值得注意的异常码 → 次数（排除线程命名、调试输出、RPC 之类的噪音）
+    std::optional<ProtonException> last;                     // 最后一个值得注意的异常
+    std::vector<std::string> gpus;                           // DXVK 枚举到的显卡（去重）
+    std::string gpu_used;                                    // DXVK 实际建设备用的那块（"Device properties: Device : …"）
+};
+// 有独显却跑在核显上：返回独显名（给 DXVK_FILTER_DEVICE_NAME 用）；否则空。
+std::string discrete_gpu_unused(const ProtonDiagnosis& d);
+// 解析 PROTON_LOG=1 + WINEDEBUG=+seh,+loaddll 得到的 steam-<appid>.log。
+// 模块：C++ 异常（e06d7363）用 info[3]（抛出模块的基址），其余用 addr，对照 "Loaded L"…" at <基址>" 找最近的一个。
+ProtonDiagnosis parse_proton_log(std::string_view text);
+std::string describe_exception_code(std::string_view code);  // c0000005 → "access violation" …
+// 给人看的几行崩溃摘要（异常、C++ 类型/信息、第一个非系统帧、栈上的文件与插件、已知原因的建议）。
+std::vector<std::string> crash_summary_lines(const CrashSummary& c);
+
 // ---- D3 ENB --------------------------------------------------------------------------------
 // 需要 ENB 二进制的迹象（找到的第一个）：农场根/游戏目录/根目录型 mod 里的 enblocal.ini、enbseries/，
 // 或任一启用 mod 的 SKSE/Plugins 下的 ENBHelperSE.dll / KiENBExtender.dll。没有返回空。
 std::string enb_wanted_by(const Instance& inst);
 bool enb_binaries_present(const Instance& inst);  // 游戏目录或启用的根目录型 mod 顶层有 d3d11.dll
+
+// ---- P0-3 文件在哪 ------------------------------------------------------------------------
+struct FileHit {
+    std::string where;  // mod 名，或 downloads/ 下的压缩包文件名
+    std::string path;   // 在 mod 目录 / 压缩包里的相对路径
+    bool in_archive = false;
+    bool enabled = true;  // mod：是否启用
+};
+// 在所有 mod 目录（递归）里按文件名（大小写不敏感）找；archives=true 时再列 downloads/ 里每个压缩包的条目（慢：每个包跑一次 7z l）。
+std::vector<FileHit> find_file(const Instance& inst, std::string_view file_name, bool archives = false);
 
 // ---- D4 mod 布局（旧版本装坏的） -----------------------------------------------------------
 struct LayoutIssue {

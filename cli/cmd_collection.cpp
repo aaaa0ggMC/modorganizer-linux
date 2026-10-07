@@ -402,7 +402,21 @@ Result run_collection_install(Context& ctx) {
     EventSink* sink = ctx.sink;
     if (sink != nullptr) sink->start("collection install");
     try {
-        const Loaded l = load_remote(ctx, &inst, ref, revision);
+        // 拿不到远端清单（key 失效、断网、限流）但本地有上次的清单：用缓存继续——要下载的 mod 会变成 pending，已装的照常处理
+        std::optional<std::string> offline_reason;
+        Loaded l = [&] {
+            try {
+                return load_remote(ctx, &inst, ref, revision);
+            } catch (const mol::Error& e) {
+                const std::string code(e.code);
+                if (code != "nexus_auth" && code != "network_error" && code != "nexus_rate_limited") throw;
+                Loaded c;
+                try { c = load_cached(inst, ref.slug); } catch (const mol::Error&) { throw e; }
+                if (revision != 0 && c.revision != revision) throw;
+                offline_reason = code + ": " + e.what();
+                return c;
+            }
+        }();
         col::State st = col::load_state(inst, l.slug);
         if (st.revision != 0 && l.revision != 0 && st.revision != l.revision)
             st.revision = l.revision;  // 版本升级：沿用已装好的 mod（按 mod tag 对应），其余照常处理
@@ -410,7 +424,10 @@ Result run_collection_install(Context& ctx) {
         st.name = l.coll.info.name;
 
         std::optional<mol::NexusClient> client;
-        try { client.emplace(make_client()); } catch (const mol::Error&) {}  // 没有 key：只处理本地已有的文件
+        if (!offline_reason) try { client.emplace(make_client()); } catch (const mol::Error&) {}  // 没有 key：只处理本地已有的文件
+        if (offline_reason && !(ctx.globals && ctx.globals->quiet))
+            std::fprintf(stderr, "collection install: Nexus unavailable (%s); using the cached manifest of revision %lld, downloads are skipped\n",
+                         offline_reason->c_str(), static_cast<long long>(l.revision));
 
         col::InstallOptions opt;
         opt.profile = std::string(ctx.profile_override());
@@ -453,6 +470,7 @@ Result run_collection_install(Context& ctx) {
             d.pending.push_back(CollectionPendingRow{P(p.key, ctx.mem), P(p.name, ctx.mem), P(p.kind, ctx.mem), P(p.detail, ctx.mem), P(p.url, ctx.mem), P("", ctx.mem), P("", ctx.mem)});
         for (const auto& n : rep.notes) d.notes.push_back(P(n, ctx.mem));
         Result r = ok(ctx, rep.complete() ? 0 : 4);
+        if (offline_reason) r.add_warning("offline", "Nexus unavailable (" + *offline_reason + "); used the cached manifest of revision " + std::to_string(l.revision), "");
         for (const auto& n : rep.notes) r.add_warning("collection_note", n, "");
         for (const auto& [code, msg] : pre.notes)
             if (code != "game_version") r.add_warning(code, msg, "");  // 版本不一致已在 collection_note 里
@@ -495,6 +513,35 @@ Result run_collection_status(Context& ctx) {
         }
     }
     Result r = ok(ctx, d.status == "complete" ? 0 : 4);
+    r.set_data(std::move(d));
+    return r;
+}
+
+Result run_collection_verify(Context& ctx) {
+    if (!ctx.args.ok()) return make_usage_error(ctx.args.error, ctx);
+    const auto inst = mol::load_instance(ctx.instance_dir, ctx.profile_override(), ctx.mem);
+    const Ref ref = parse_ref(ctx.args.positionals.front(), inst);
+    const Loaded l = load_cached(inst, ref.slug);
+    col::State st = col::load_state(inst, ref.slug);
+    EventSink* sink = ctx.sink;
+    const auto rep = col::verify_collection(inst, l.coll, st, ctx.profile_override(), [&](std::size_t d, std::size_t t, std::string_view name) {
+        if (sink != nullptr) sink->progress("verify", d, t, name);
+    });
+    CollectionVerifyData d{.slug = P(ref.slug, ctx.mem), .checked = static_cast<std::int64_t>(rep.checked), .skipped = static_cast<std::int64_t>(rep.skipped),
+                           .mismatched = std::pmr::vector<VerifyRow>(ctx.mem), .marked = 0, .missing_plugins = std::pmr::vector<std::pmr::string>(ctx.mem)};
+    for (const auto& p : rep.missing_plugins) d.missing_plugins.push_back(P(p, ctx.mem));
+    const bool fix = ctx.args.get_bool("--fix", false);
+    for (const auto& m : rep.mismatched) {
+        VerifyRow row{P(m.key, ctx.mem), P(m.name, ctx.mem), P(m.mod_dir, ctx.mem), P(m.kind, ctx.mem), static_cast<std::int64_t>(m.missing.size()),
+                      static_cast<std::int64_t>(m.extra.size()), std::pmr::vector<std::pmr::string>(ctx.mem), std::pmr::vector<std::pmr::string>(ctx.mem)};
+        for (std::size_t i = 0; i < m.missing.size() && i < 10; ++i) row.missing.push_back(P(m.missing[i], ctx.mem));
+        for (std::size_t i = 0; i < m.extra.size() && i < 10; ++i) row.extra.push_back(P(m.extra[i], ctx.mem));
+        d.mismatched.push_back(std::move(row));
+        // 复刻缺的文件通常是压缩包里本来就没有（安装时已记进 note），重装也补不上：只标记 FOMOD 的
+        if (fix && m.kind == "fomod") { st.overrides[m.key].reinstall = true; ++d.marked; }
+    }
+    if (fix && d.marked > 0) col::save_state(inst, st);
+    Result r = ok(ctx, d.mismatched.empty() && d.missing_plugins.empty() ? 0 : 4);
     r.set_data(std::move(d));
     return r;
 }

@@ -112,6 +112,14 @@ void prefix_health(Sink& s, const Instance& inst, std::string_view game_version)
     } else if (log.found) {
         s.add("skse.plugins", "ok", std::to_string(log.loaded) + " SKSE plugin(s) loaded in the last run");
     }
+    // D7：上次运行崩了（CrashLogger 的日志比这次运行的 skse64.log 新）
+    if (const auto cr = h::latest_crash(inst); !cr.file.empty() && (!log.found || cr.mtime >= log.mtime)) {
+        const auto lines = h::crash_summary_lines(cr);
+        std::string msg = "the last run crashed (" + fs::path(cr.file).filename().string() + ")";
+        for (std::size_t i = 0; i < lines.size() && i < 4; ++i) if (!lines[i].starts_with("hint:")) msg += "; " + lines[i];
+        s.add("game.last_crash", "warn", msg,
+              cr.hint.empty() ? "read it with `logs --file " + fs::path(cr.file).filename().string() + "`" : cr.hint);
+    }
 }
 
 void mods_health(Sink& s, const Instance& inst) {
@@ -127,7 +135,7 @@ void mods_health(Sink& s, const Instance& inst) {
     struct Kind { const char* id; const char* what; const char* hint; };
     static const Kind kinds[] = {
         {"nested_data", "content sits in a Data/ folder inside the mod, so the game never sees it", reinstall},
-        {"raw_fomod", "ModuleConfig.xml at the top level: the FOMOD installer was never run", reinstall},
+        {"raw_fomod", "a FOMOD config sits inside the mod (the archive was copied as-is): the FOMOD installer was never run", reinstall},
         {"backslash_name", "file names contain '\\' (a Windows zip unpacked literally)", reinstall},
         {"enb_in_data", "an ENB preset installed as a normal mod lands in Data/, where ENB never looks",
          "collection mods: `collection install SLUG` marks them as root-folder mods (no reinstall); others: reinstall with `mods install --root`"},
@@ -256,11 +264,28 @@ vector<Check> run_doctor(const Instance& inst, std::string_view game_version, mr
             if (issues.empty()) {
                 s.add("plugins.masters", "ok", std::to_string(pl.rows.size()) + " plugin(s), all masters satisfied");
             } else {
+                // P0-3：缺的 master 也许就在某个 mod 里，只是放错了层（mods/X/Data/…）或那个 mod 被禁用了
+                std::map<std::string, std::string> where;  // casefold(master) → 提示
+                for (const auto& is : issues) {
+                    if (std::string_view(is.kind) != "missing" || where.size() >= 5) continue;
+                    const std::string key(casefold(is.master));
+                    if (where.count(key)) continue;
+                    std::string hint;
+                    for (const auto& hit : health::find_file(inst, std::string(is.master))) {
+                        hint = !hit.enabled ? "it is in the disabled mod '" + hit.where + "': enable that mod"
+                                            : "it is in mod '" + hit.where + "' at " + hit.path + ", not at the mod's top level: that mod was installed with the wrong layout, reinstall it";
+                        break;
+                    }
+                    where[key] = hint;
+                }
                 for (const auto& is : issues) {
                     const std::string k(is.kind);
-                    if (k == "missing")
+                    if (k == "missing") {
+                        const auto w = where.find(std::string(casefold(is.master)));
                         s.add("plugins.masters", "error", std::string(is.plugin) + " requires " + std::string(is.master) + ", which is not installed",
-                              "install the missing master or disable " + std::string(is.plugin));
+                              w != where.end() && !w->second.empty() ? w->second
+                                                                    : "install the missing master or disable " + std::string(is.plugin) + " (`mods find " + std::string(is.master) + " --archives` searches the downloaded archives)");
+                    }
                     else if (k == "disabled")
                         s.add("plugins.masters", "error", std::string(is.plugin) + " requires " + std::string(is.master) + ", which is disabled",
                               "enable " + std::string(is.master), {"plugins", "enable", std::string_view(is.master)});
@@ -274,6 +299,19 @@ vector<Check> run_doctor(const Instance& inst, std::string_view game_version, mr
     }
 
     if (fs::is_directory(fs::path(std::string(inst.mods_dir)), ec)) mods_health(s, inst);
+
+    // D4c：游戏（读到别的列表后）重写了 profile 的 plugins.txt，把插件弄丢了
+    if (fs::is_directory(pdir, ec)) {
+        const auto lost = plugins_lost_since_snapshot(inst, {}, mem);
+        if (!lost.empty()) {
+            std::vector<std::string> names;
+            for (const auto& n : lost) names.emplace_back(n);
+            s.add("plugins.rewritten", "error",
+                  std::to_string(lost.size()) + " plugin(s) mo-linux had enabled are no longer enabled in plugins.txt (" + join_some(names, 4) +
+                      "); the game rewrote the list, usually because it read a different plugins.txt",
+                  "restore the last list mo-linux wrote; then `plugins sync` (it also removes case-variant Plugins.txt shadows)", {"plugins", "restore"});
+        }
+    }
 
     // plugins.txt 映射（只检查最常见的位置，不创建）
     const fs::path appdata = prefix / "drive_c/users" / std::string(inst.cfg.prefix_user) / "AppData/Local/Skyrim Special Edition/plugins.txt";

@@ -217,3 +217,34 @@ TEST(collection_plugin_spec_with_duplicates_keeps_every_plugin) {
     CHECK(txt.find("*B.esp") < txt.find("*A.esp"));
     CHECK(txt.find("*A.esp") < txt.find("*C.esp"));
 }
+
+TEST(game_rewrites_of_plugins_txt_are_told_apart_and_restorable) {
+    Tmp t;
+    const Instance inst = make(t);
+    make_plugin(t.dir / "game/Data/Skyrim.esm", 0x1, {});
+    make_plugin(t.dir / "game/Data/ccbgssse001-fish.esm", 0x1, {"Skyrim.esm"});
+    put(t.dir / "game/Skyrim.ccc", "ccBGSSSE001-Fish.esm\r\n");
+    put(t.dir / "game/SkyrimSE.exe", "x");
+    make_plugin(t.dir / "inst/mods/M/A.esp", 0, {"Skyrim.esm"});
+    make_plugin(t.dir / "inst/mods/M/B.esp", 0, {"Skyrim.esm"});
+    put(t.dir / "inst/profiles/Default/modlist.txt", "+M\n");
+    const std::vector<string> forced{string("Skyrim.esm")};
+    save_plugins(inst, load_plugins(inst, forced), {});
+    const fs::path pt = t.dir / "inst/profiles/Default/plugins.txt";
+    CHECK(fs::exists(t.dir / "inst/profiles/Default/plugins.txt.mol-last-good"));
+    CHECK(plugins_lost_since_snapshot(inst).empty());
+
+    // 正常的游戏重写：省略本体与 Skyrim.ccc 里的 CC，其余照旧
+    put(pt, "# This file is used by Skyrim to keep track of your downloaded content.\n*A.esp\n*B.esp\n");
+    CHECK(plugins_lost_since_snapshot(inst).empty());
+
+    // A23：游戏读到了别的（空）列表，把我们的列表重写成全部禁用
+    put(pt, "# This file is used by Skyrim to keep track of your downloaded content.\nA.esp\nB.esp\n");
+    const auto lost = plugins_lost_since_snapshot(inst);
+    CHECK_EQ(lost.size(), std::size_t{2});
+
+    CHECK(restore_plugins_snapshot(inst));
+    CHECK(plugins_lost_since_snapshot(inst).empty());
+    const auto l = load_plugins(inst, forced);
+    for (const auto& r : l.rows) CHECK(r.enabled);
+}

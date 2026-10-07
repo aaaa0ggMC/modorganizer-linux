@@ -4,6 +4,7 @@
 #include <cstring>
 #include <filesystem>
 #include <fstream>
+#include <set>
 #include <map>
 
 #include "mol/casefold.hpp"
@@ -179,6 +180,63 @@ void save_plugins(const Instance& inst, const PluginList& list, std::string_view
     std::error_code ec;
     fs::rename(tmp, lo, ec);
     if (ec) throw Error("io_error", "cannot replace loadorder.txt: " + ec.message(), lo.string());
+    // 「mo-linux 最后一次写的」副本：游戏之后若把列表改坏（A23：全部禁用），可以发现并恢复
+    for (const char* n : {"plugins.txt", "loadorder.txt"}) {
+        fs::copy_file(pdir / n, pdir / (std::string(n) + ".mol-last-good"), fs::copy_options::overwrite_existing, ec);
+        ec.clear();
+    }
+}
+
+vector<string> implicit_plugins(const Instance& inst, mr* mem) {
+    vector<string> out = default_forced_plugins(mem);
+    out.emplace_back("_ResourcePack.esl");
+    // Skyrim.ccc：游戏自动加载的 Creation Club 插件清单
+    const fs::path game{std::string(inst.cfg.game_dir)};
+    std::error_code ec;
+    for (fs::directory_iterator it(game, ec), end; !ec && it != end; it.increment(ec)) {
+        if (casefold(it->path().filename().string()) != "skyrim.ccc") continue;
+        std::ifstream in(it->path());
+        std::string line;
+        while (std::getline(in, line)) {
+            while (!line.empty() && (line.back() == '\r' || line.back() == ' ')) line.pop_back();
+            if (!line.empty()) out.emplace_back(line);
+        }
+        break;
+    }
+    return out;
+}
+
+vector<string> plugins_lost_since_snapshot(const Instance& inst, std::string_view profile, mr* mem) {
+    vector<string> lost(mem);
+    const fs::path pdir = profile_path(inst, profile);
+    std::error_code ec;
+    if (!fs::exists(pdir / "plugins.txt.mol-last-good", ec) || !fs::exists(pdir / "plugins.txt", ec)) return lost;
+    std::set<std::string> now, implicit;
+    for (const auto& e : read_plugins_txt((pdir / "plugins.txt").string(), mem))
+        if (e.enabled) now.insert(std::string(casefold(e.name)));
+    for (const auto& n : implicit_plugins(inst, mem)) implicit.insert(std::string(casefold(n)));
+    for (const auto& e : read_plugins_txt((pdir / "plugins.txt.mol-last-good").string(), mem)) {
+        if (!e.enabled) continue;
+        const std::string k(casefold(e.name));
+        if (!now.count(k) && !implicit.count(k)) lost.push_back(e.name);
+    }
+    return lost;
+}
+
+bool restore_plugins_snapshot(const Instance& inst, std::string_view profile) {
+    const fs::path pdir = profile_path(inst, profile);
+    std::error_code ec;
+    if (!fs::exists(pdir / "plugins.txt.mol-last-good", ec)) return false;
+    for (const char* n : {"plugins.txt", "loadorder.txt"}) {
+        const fs::path snap = pdir / (std::string(n) + ".mol-last-good");
+        if (!fs::exists(snap, ec)) continue;
+        const fs::path tmp = pdir / (std::string(n) + ".mol-tmp");
+        fs::copy_file(snap, tmp, fs::copy_options::overwrite_existing, ec);
+        if (ec) throw Error("io_error", "cannot restore " + std::string(n) + ": " + ec.message(), snap.string());
+        fs::rename(tmp, pdir / n, ec);  // 原子替换：前缀里指向它的链接照常有效
+        if (ec) throw Error("io_error", "cannot restore " + std::string(n) + ": " + ec.message(), (pdir / n).string());
+    }
+    return true;
 }
 
 bool plugin_set_enabled(PluginList& l, std::string_view name, bool enabled) {

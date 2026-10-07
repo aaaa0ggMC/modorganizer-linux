@@ -23,6 +23,8 @@
 | A22 | `DynDOLOD.esp`/`Synthesis.esp`/`Constellations - Compatibility 3.esp` 等**末尾的插件不在 plugins.txt 里**，另有 34 行重复 | 清单 `plugins` 有 35 个重复名，`apply_plugin_spec` 不去重：重复项各占一个槽位，把末尾插件挤出列表 | 按 casefold 只认第一次出现 | `collection_plugin_spec_with_duplicates_keeps_every_plugin` |
 | A23 | 进主菜单弹 `Dismembering Framework.esm is missing`；游戏把 profile 的 plugins.txt 重写成**全部无 `*`**（文件头变成 `# This file is used by Skyrim…`） | 原版运行留下真实的 `AppData/…/Plugins.txt`（大写 P），`plugins sync` 按上游映射建小写 `plugins.txt` 链接——Linux 上两者并存，**Wine 优先打开大小写完全一致的 `Plugins.txt`**（原版空列表）→ 一个 mod 插件都没加载，游戏再按 loadorder 把列表写回（全禁用） | 建链接前把只差大小写的同名条目改名 `.mol-backup`（链接直接删） | `case_variant_shadows_of_the_target_are_backed_up` |
 | A24 | 合集的 ENB 预设（Constellations - ENB Preset 等 6 个）落在 `Data/enbseries`，ENB 读不到 | 清单 `details.type`（Vortex mod 类型 `enb`/`dinput` = 部署到游戏根目录）被忽略 | `enb`/`dinput` 装成根目录型；已装的在 `collection install` 时补根目录标记（不重装） | `vortex_enb_and_dinput_mods_deploy_to_the_game_folder` |
+| A25 | Forgotten Retex Project 整包原样装进来（`FOMOD/`、`Main/`、`Optional/`），FOMOD 没跑 | 压缩包是 `Data/FOMOD/…`：`Data` 不当包装剥，顶层又找不到 fomod → 当普通包 | 顶层没有 FOMOD 而唯一的顶层目录里有 → 那一层是模块根（同 MO2）；`mods.layout.raw_fomod` 也认 mod 里的 `fomod/ModuleConfig.xml` | `fomod_inside_the_data_folder_is_still_run` |
+| A26 | 清单启用的 14 个插件磁盘上没有（`More Dialogue Options - … patch.esp`、`CompanionTweaks - USSEP.esp`…），一直没人发现 | `apply_plugin_spec` 静默跳过不存在的插件；这些 mod 是 A18 修复前装的（条件补丁的依赖当时还没装），选择指纹没变不会自动重装 | `collection install` 的 notes 与 `collection verify` 都列出「清单启用、磁盘上没有」的插件；`collection verify --fix` 标记重装 | `verify_finds_fomod_mods_whose_files_no_longer_match_and_absent_plugins` |
 | — | 修了安装逻辑但旧 mod 已装错 | 没有「重装」入口 | `collection resolve --mod KEY --reinstall`（新内容齐了才替换旧目录，modlist 位置不变） | 同 A17 |
 
 ### 本轮修复的后续（P0）
@@ -44,6 +46,21 @@
 - **D8** `run` 启动前门：运行库过旧 / ContentCatalog 写坏 → `prefix_unhealthy` 拒绝启动，`--force` 跳过。
 - 测试：`tests/test_health.cpp`（7 项）。
 - 未做：D4c（游戏改写 plugins.txt 的检测，需按「去掉隐式插件后比较集合」）、D4d（KreatE 等解析符号链接真实路径的插件 → 硬链接规则）、D5（降级 depot 校验 / `game downgrade`）、D6（混合显卡）、D7 的 `run --diagnose`（PROTON_LOG 自动解析）、P0-2、P0-3。
+
+## 第三轮（2026-10-07 傍晚）已实现
+- **D4c** `plugins.rewritten` + `plugins restore`：`save_plugins` 每次留 `.mol-last-good`；比较时排除隐式插件（本体/DLC/`_ResourcePack.esl`/`Skyrim.ccc`）。实测：A23 那份坏列表 → 丢 2369 个；正常的游戏重写（只省略 80 个隐式）→ 0。`run` 在这种情况下拒绝启动（不然会把坏列表存成新副本）。
+- **D9 补完** `run` 自动启动 Steam（`steam -silent` + 等 connection_log 新的 `[Logged On`），`--no-start-steam`。
+- **P0-3** `doctor` 缺前置时递归找文件（1.3 s / 2444 mod）；`mods find FILE [--archives]`（压缩包目录 64 s / 2444 包，过滤目录条目）。
+- **D7** `run --diagnose` + `doctor game.last_crash`：CrashLogger v1.24 格式（`CALL STACK ([P]robable / [S]tack scan)`、`C++ EXCEPTION: Type/Info`、`STACK:` 里的 `(char*)` 字符串）；认得出 ContentCatalog 崩溃。等待以 SkyrimSE.exe 为准（CrashLogger 开的 notepad 曾让第一次诊断卡住）。端到端：故意放回坏 ContentCatalog → 加载 7 分钟后崩溃 → 诊断给出 `std::invalid_argument: invalid stoull argument`、栈上 `ContentCatalog.txt`、建议 `fix content-catalog`。测试用的真实日志：`tests/data/crashlogger_1_24_contentcatalog.log`。
+- **D6（检测）**：从 Proton 日志的 DXVK 段读出枚举到的显卡与实际使用的那块；有独显却用核显时提示 `DXVK_FILTER_DEVICE_NAME`。本机实测用的是 RTX 5060。
+- `collection install` 远端不可用时用缓存清单继续（本轮 Nexus key 401 时发现）。
+- 仍未做：D4d（KreatE 硬链接规则，需改 farm diff + COW + capture，风险高、收益是一行红字）、D5（降级 depot 校验 / `game downgrade`，要人输 Steam 凭据）、P0-2（FOMOD 选择的解析器版本号 / `--verify-fomod`）、`run --gpu` 之类的持久显卡设置。
+
+## 第四轮（2026-10-07 晚）已实现
+- **P0-2 `collection verify [--fix]`**：用当前安装逻辑重算每个已装 mod 应有的文件（FOMOD：配置 + 压缩包目录 + 清单选择；复刻：hashes），与磁盘比路径集合。实测 Constellations：初版 182 个「不一致」→ 修掉三个误报源（7z 的目录条目是 `Attributes = D…`；FOMOD 目标 `.`；Vortex 把 `meta.ini` 记进 hashes）与「策展人列表里没有的顶层插件不算应有」→ **8 个真问题**（4 个条件补丁没装、Forgotten Retex 原样安装 A25、Xtended Stay 的 Bruma 语音……）→ `--fix` + `collection install` → **0 个不一致、14 个缺失插件全部补上**。
+- **FOMOD 配置缓存** `~/.cache/mo-linux/fomod/<xxh64(名|大小|mtime)>.xml`：安装时顺手存；固实 7z 里只取 fomod/ 也要解整块。verify 全量 1106 s → 110 s。
+- **后台子进程不再继承调用方的描述符**（`run --detach`/`--diagnose`、`steam -silent`）：stdout/stderr → `<实例>/logs/run-*.log` 或 `/dev/null`，stdin → `/dev/null`，`close_range(3, …)`。之前用管道读 mo-linux 输出的 GUI/Agent 会一直卡到游戏退出（诊断测试时实际撞上）。
+- `run --diagnose` 端到端第二次复现：崩溃后不等 CrashLogger 的 notepad，直接给出结论。
 
 ## 待做：新的 doctor 检查 + 修复
 

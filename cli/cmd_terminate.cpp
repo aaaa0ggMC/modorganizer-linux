@@ -2,6 +2,7 @@
 // 混用约束：所有 #include 在 import 之前（详见 cli/cmd_common.hpp 文件头）。
 #include <string>
 
+#include "mol/health.hpp"
 #include "mol/instance.hpp"
 #include "mol/terminate.hpp"
 
@@ -34,6 +35,19 @@ Result run_terminate(Context& ctx) {
         r.exit_code = 1;
         r.add_warning("still_running", std::to_string(res.remaining.size()) + " process(es) survived SIGKILL", "");
     }
+    r.set_data(std::move(d));
+    return r;
+}
+
+Result run_mods_find(Context& ctx) {
+    if (!ctx.args.ok()) return make_usage_error(ctx.args.error, ctx);
+    const auto inst = mol::load_instance(ctx.instance_dir, ctx.profile_override(), ctx.mem);
+    const std::string file(ctx.args.positionals.front());
+    const bool archives = ctx.args.get_bool("--archives", false);
+    ModsFindData d{.file = std::pmr::string(file, ctx.mem), .searched_archives = archives, .hits = std::pmr::vector<FindHitRow>(ctx.mem)};
+    for (const auto& h : mol::health::find_file(inst, file, archives))
+        d.hits.push_back(FindHitRow{std::pmr::string(h.where, ctx.mem), std::pmr::string(h.path, ctx.mem), h.in_archive, h.enabled});
+    Result r = make_ok(ctx);
     r.set_data(std::move(d));
     return r;
 }

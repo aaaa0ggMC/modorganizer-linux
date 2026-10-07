@@ -614,6 +614,34 @@ struct ExecutablesData {
     std::pmr::vector<ExecutableRow> executables;
 };
 
+// ---- collection verify ------------------------------------------------------
+struct VerifyRow {
+    std::pmr::string key, name, mod_dir, kind;
+    std::int64_t missing_count = 0, extra_count = 0;
+    std::pmr::vector<std::pmr::string> missing;  // 前 10 个
+    std::pmr::vector<std::pmr::string> extra;
+};
+struct CollectionVerifyData {
+    std::pmr::string slug;
+    std::int64_t checked = 0, skipped = 0;
+    std::pmr::vector<VerifyRow> mismatched;
+    std::int64_t marked = 0;  // --fix：标记为 reinstall 的个数
+    std::pmr::vector<std::pmr::string> missing_plugins;  // 清单启用、磁盘上没有的插件
+};
+
+// ---- mods find --------------------------------------------------------------
+struct FindHitRow {
+    std::pmr::string where;  // mod 名或压缩包文件名
+    std::pmr::string path;
+    bool in_archive = false;
+    bool enabled = true;
+};
+struct ModsFindData {
+    std::pmr::string file;
+    bool searched_archives = false;
+    std::pmr::vector<FindHitRow> hits;
+};
+
 // ---- terminate --------------------------------------------------------------
 struct TerminateProcRow {
     std::int64_t pid = 0;
@@ -644,6 +672,8 @@ struct RunData {
     std::pmr::string cow_library;  // 注入的库；空 = 没有启用（--no-cow 或找不到库）
     std::size_t cow_copies = 0;    // 本次运行中被换成副本的农场链接数（含只读打开写模式、最后没改的）
     std::size_t cow_reflinked = 0; // 其中走 reflink 的（btrfs/xfs 上应等于 cow_copies；ext4 上为 0）
+    std::pmr::string log_file;                 // --diagnose：Proton 日志
+    std::pmr::vector<std::pmr::string> diagnosis;  // --diagnose：结论（一行一条）
 };
 
 // ---- plan / status / apply / unlink ---------------------------------------

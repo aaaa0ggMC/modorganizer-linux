@@ -230,6 +230,47 @@ std::pmr::vector<std::pmr::string> render_text(const Result& r, mol::mr* mem) {
         }
         add(lines, std::to_string(adata::integer(r.data, "errors")) + " error(s), " +
                        std::to_string(adata::integer(r.data, "warnings")) + " warning(s)", mem);
+    } else if (cmd == "run") {
+        if (adata::boolean(r.data, "dry_run")) add(lines, "run --dry-run: " + S(r.data, "exe"), mem);
+        else if (adata::boolean(r.data, "detached")) add(lines, "run: started " + S(r.data, "exe"), mem);
+        else add(lines, "run: " + S(r.data, "exe") + " exited with " + std::to_string(adata::integer(r.data, "game_exit_code")), mem);
+        const alib6::AData* dg = adata::field(r.data, "diagnosis");
+        const std::size_t n = dg == nullptr ? 0 : adata::size(*dg);
+        if (n > 0) add(lines, "diagnosis (" + S(r.data, "log_file") + "):", mem);
+        for (std::size_t i = 0; i < n; ++i)
+            if (const alib6::AData* x = adata::at(*dg, i)) if (auto v = x->try_to<std::string_view>()) add(lines, "  " + std::string(*v), mem);
+    } else if (cmd == "collection verify") {
+        const alib6::AData* ms = adata::field(r.data, "mismatched");
+        const std::size_t n = ms == nullptr ? 0 : adata::size(*ms);
+        for (std::size_t i = 0; i < n; ++i) {
+            const alib6::AData* m = adata::at(*ms, i);
+            if (m == nullptr) continue;
+            std::string line = "  [" + std::string(adata::str(*m, "kind")) + "] " + std::string(adata::str(*m, "mod_dir")) + ": " +
+                               std::to_string(adata::integer(*m, "missing_count")) + " missing, " + std::to_string(adata::integer(*m, "extra_count")) + " extra";
+            const alib6::AData* miss = adata::field(*m, "missing");
+            if (miss != nullptr && adata::size(*miss) > 0)
+                if (const alib6::AData* x = adata::at(*miss, 0)) if (auto v = x->try_to<std::string_view>()) line += " (e.g. " + std::string(*v) + ")";
+            add(lines, line, mem);
+        }
+        if (const alib6::AData* mp = adata::field(r.data, "missing_plugins"); mp && adata::size(*mp) > 0) {
+            std::string l = "  enabled in the collection but not installed:";
+            for (std::size_t i = 0; i < adata::size(*mp); ++i)
+                if (const alib6::AData* x = adata::at(*mp, i)) if (auto v = x->try_to<std::string_view>()) l += (i ? ", " : " ") + std::string(*v);
+            add(lines, l, mem);
+        }
+        add(lines, "collection verify: " + std::to_string(adata::integer(r.data, "checked")) + " checked, " + std::to_string(adata::integer(r.data, "skipped")) +
+                       " skipped, " + std::to_string(n) + " differ" + (adata::integer(r.data, "marked") > 0 ? ", " + std::to_string(adata::integer(r.data, "marked")) + " marked for reinstall" : ""), mem);
+    } else if (cmd == "mods find") {
+        const alib6::AData* hs = adata::field(r.data, "hits");
+        const std::size_t n = hs == nullptr ? 0 : adata::size(*hs);
+        for (std::size_t i = 0; i < n; ++i) {
+            const alib6::AData* h = adata::at(*hs, i);
+            if (h == nullptr) continue;
+            const bool arc = adata::boolean(*h, "in_archive");
+            add(lines, std::string(arc ? "archive " : adata::boolean(*h, "enabled") ? "mod     " : "mod (disabled) ") + std::string(adata::str(*h, "where")) + " : " +
+                           std::string(adata::str(*h, "path")), mem);
+        }
+        if (n == 0) add(lines, "mods find: " + S(r.data, "file") + " not found" + (adata::boolean(r.data, "searched_archives") ? "" : " in any mod (add --archives to search downloads/)"), mem);
     } else if (cmd == "terminate") {
         const bool dry = adata::boolean(r.data, "dry_run");
         const alib6::AData* ps = adata::field(r.data, "processes");
