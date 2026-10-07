@@ -315,3 +315,67 @@ TEST(very_long_mod_names_are_shortened_stably) {
     CHECK(fs::exists(t.dir / "inst/mods" / a / "meshes/a.nif"));
     CHECK(mod_name_taken(inst, longname, "Default"));
 }
+
+TEST(data_folder_next_to_readme_files_is_the_mod_root) {
+    if (!have_zip_tool()) return;
+    Tmp t;
+    const Instance inst = make(t);
+    // Data/ + 说明文档：Data 才是根（真实例子：Interesting NPCs 4.5 → 4.53 Hotfix）
+    put(t.dir / "a/Data/3DNPC.esp");
+    put(t.dir / "a/Data/Scripts/x.pex");
+    put(t.dir / "a/Patch Notes.txt");
+    CHECK(zip_dir(t.dir / "a", t.dir / "a.zip"));
+    install_archive(inst, (t.dir / "a.zip").string(), "Hotfix");
+    CHECK(fs::exists(t.dir / "inst/mods/Hotfix/3DNPC.esp"));
+    CHECK(fs::exists(t.dir / "inst/mods/Hotfix/Scripts/x.pex"));
+    CHECK(fs::exists(t.dir / "inst/mods/Hotfix/Patch Notes.txt"));
+    CHECK(!fs::exists(t.dir / "inst/mods/Hotfix/Data"));
+    // 顶层已经是游戏数据（有 meshes/）时，旁边的 Data 目录不动
+    put(t.dir / "b/meshes/m.nif");
+    put(t.dir / "b/Data/odd.txt");
+    CHECK(zip_dir(t.dir / "b", t.dir / "b.zip"));
+    install_archive(inst, (t.dir / "b.zip").string(), "Mixed");
+    CHECK(fs::exists(t.dir / "inst/mods/Mixed/meshes/m.nif"));
+    CHECK(fs::exists(t.dir / "inst/mods/Mixed/Data/odd.txt"));
+}
+
+TEST(archive_living_entirely_inside_fomod_is_still_a_fomod) {
+    if (!have_zip_tool()) return;
+    Tmp t;
+    const Instance inst = make(t);
+    // 真实例子：Unofficial Lux Patchhub——所有东西都在 Fomod/ 下，源路径写 fomod\...
+    std::string xml = R"(<?xml version="1.0"?><config><installSteps order="Explicit"><installStep name="S"><optionalFileGroups>
+<group name="G" type="SelectAny"><plugins order="Explicit">
+<plugin name="P"><files><file source="fomod\patches\p.esp" destination="p.esp"/></files><typeDescriptor><type name="Recommended"/></typeDescriptor></plugin>
+</plugins></group></optionalFileGroups></installStep></installSteps></config>)";
+    fs::create_directories(t.dir / "a/Fomod");
+    std::ofstream(t.dir / "a/Fomod/ModuleConfig.xml") << xml;
+    put(t.dir / "a/Fomod/patches/p.esp", "P");
+    put(t.dir / "a/Fomod/patches/unused.esp", "U");
+    CHECK(zip_dir(t.dir / "a", t.dir / "a.zip"));
+    InstallOptions o;
+    o.name = "Hub";
+    o.fomod = FomodMode::Defaults;
+    const auto r = install_archive(inst, (t.dir / "a.zip").string(), o);
+    CHECK(r.fomod);
+    CHECK(fs::exists(t.dir / "inst/mods/Hub/p.esp"));
+    CHECK(!fs::exists(t.dir / "inst/mods/Hub/patches"));
+}
+
+TEST(backslash_paths_from_windows_zips_become_directories) {
+    if (!have_zip_tool()) return;
+    Tmp t;
+    const Instance inst = make(t);
+    // 真实例子：Skyrim Priority SE AE 3.4.0 的 zip 里条目名是 "Data\SKSE\Plugins\PriorityMod.dll"
+    put(t.dir / "a" / "Data\\SKSE\\Plugins\\PriorityMod.dll", "D");
+    put(t.dir / "a" / "Data\\SKSE\\Plugins\\PriorityMod.toml", "T");
+    CHECK(zip_dir(t.dir / "a", t.dir / "a.zip"));
+    install_archive(inst, (t.dir / "a.zip").string(), "Priority");
+    CHECK(fs::exists(t.dir / "inst/mods/Priority/SKSE/Plugins/PriorityMod.dll"));
+    CHECK(fs::exists(t.dir / "inst/mods/Priority/SKSE/Plugins/PriorityMod.toml"));
+    // 拆出来越界的拒绝
+    put(t.dir / "b" / "..\\..\\evil.dll", "E");
+    CHECK(zip_dir(t.dir / "b", t.dir / "b.zip"));
+    CHECK_EQ(code_of([&] { install_archive(inst, (t.dir / "b.zip").string(), "Evil"); }), std::string("invalid_argument"));
+    CHECK(!fs::exists(t.dir / "inst/evil.dll"));
+}

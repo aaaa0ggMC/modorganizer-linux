@@ -248,10 +248,10 @@ vector<PromoteEntry> promote_overwrite(const Instance& inst, std::span<const std
     return out;
 }
 
-bool farm_in_use(const Instance& inst) {
+std::string farm_user(const Instance& inst) {
     std::error_code ec;
     const fs::path farm = fs::weakly_canonical(fs::path(std::string(inst.farm_path)), ec);
-    if (farm.empty()) return false;
+    if (farm.empty()) return {};
     const std::string fwd = farm.string();
     std::string bwd = fwd;
     std::replace(bwd.begin(), bwd.end(), '/', '\\');
@@ -262,20 +262,29 @@ bool farm_in_use(const Instance& inst) {
         if (std::stol(name) == self) continue;
         std::error_code e2;
         const fs::path cwd = fs::read_symlink(it->path() / "cwd", e2);
-        if (!e2) {
-            const std::string c = cwd.string();
-            if (c == fwd || c.rfind(fwd + "/", 0) == 0) return true;
-        }
         std::ifstream in(it->path() / "cmdline", std::ios::binary);
         std::string cmd((std::istreambuf_iterator<char>(in)), std::istreambuf_iterator<char>());
-        if (cmd.find(fwd + "/") != std::string::npos || cmd.find(bwd + "\\") != std::string::npos) return true;
+        bool hit = false;
+        if (!e2) {
+            const std::string c = cwd.string();
+            hit = c == fwd || c.rfind(fwd + "/", 0) == 0;
+        }
+        hit = hit || cmd.find(fwd + "/") != std::string::npos || cmd.find(bwd + "\\") != std::string::npos;
+        if (!hit) continue;
+        std::replace(cmd.begin(), cmd.end(), '\0', ' ');
+        while (!cmd.empty() && cmd.back() == ' ') cmd.pop_back();
+        if (cmd.size() > 120) cmd = cmd.substr(0, 120) + "…";
+        return "pid " + name + ": " + cmd;
     }
-    return false;
+    return {};
 }
 
+bool farm_in_use(const Instance& inst) { return !farm_user(inst).empty(); }
+
 void require_farm_idle(const Instance& inst) {
-    if (farm_in_use(inst))
-        throw Error("farm_busy", "the farm is in use by a running process (is the game still running?)", inst.farm_path.c_str());
+    if (const std::string who = farm_user(inst); !who.empty())
+        throw Error("farm_busy", "the farm is in use by a running process (" + who + "); close it, or end everything using this instance with "
+                                 "`mo-linux terminate` (leftovers such as `steam.exe steam://run/…` are common)", inst.farm_path.c_str());
 }
 
 }  // namespace mol

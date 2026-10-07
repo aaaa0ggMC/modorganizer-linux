@@ -24,7 +24,9 @@ namespace mol {
 //   Raw      → 忽略 FOMOD，按普通压缩包原样安装
 //   Defaults → 全部用默认选择
 //   Choices  → 用 InstallOptions::choices（缺失的可见组报错；use_defaults_for_missing 为真时缺失的组用默认）
-enum class FomodMode { Unset, Raw, Defaults, Choices };
+//   Replicate→ 不跑 FOMOD：按 InstallOptions::replicate 的 (路径, md5) 从压缩包里挑文件（集合清单的 `hashes`）；
+//              压缩包没有 FOMOD 时同样生效。找不到的记进 InstallResult::missing；一个都找不到 → Error{invalid_argument}。
+enum class FomodMode { Unset, Raw, Defaults, Choices, Replicate };
 
 struct InstallOptions {
     std::string_view name;
@@ -35,6 +37,8 @@ struct InstallOptions {
     bool use_defaults_for_missing = false;
     bool fomod_lenient = false;  // Choices 来自集合清单：对不上的组退回默认、不存在的插件忽略，记进 InstallResult::fomod_notes
     fomod::Env fomod_env;  // file_state 为空时安装会自己补上（查游戏 Data 与已启用 mod）
+    std::vector<std::pair<std::string, std::string>> replicate;  // FomodMode::Replicate：(相对 mod 根的路径, md5)
+    bool replace_existing = false;  // mods/<name> 已存在时原地替换（新内容装好后才换掉旧目录；modlist 不重复添加）
 };
 
 struct InstallResult {
@@ -58,12 +62,15 @@ struct InstallResult {
     InstallResult& operator=(InstallResult&&) = default;
 };
 
-// name 空 → 压缩包文件名（去扩展名）。mods/<name> 已存在 → Error{invalid_argument}（不覆盖）。
+// name 空 → 压缩包文件名（去扩展名）。mods/<name> 已存在 → Error{invalid_argument}（不覆盖；replace_existing 时替换）。
 // force_root: 强制按根目录型处理。失败时清理半成品目录。
 InstallResult install_archive(const Instance& inst, std::string_view archive, const InstallOptions& opt, mr* mem = default_mr());
 // 兼容旧调用：FOMOD 一律按 Raw 处理。
 InstallResult install_archive(const Instance& inst, std::string_view archive, std::string_view name = {},
                               bool force_root = false, std::string_view profile = {}, mr* mem = default_mr());
+
+// 这一层是不是游戏 Data 根（顶层有 meshes/、scripts/、*.esp …；规则同上游 SkyrimSEModDataChecker）。
+bool is_data_root_dir(std::string_view dir);
 
 // install_archive 用的 mod 目录名清理规则（去掉路径/Windows 非法字符、首尾的点与空格）。
 std::string sanitize_mod_name(std::string_view name);

@@ -44,6 +44,10 @@ inline constexpr RouteEntry kRoutes[] = {
     {"nexus/files", "nexus files", &cli::run_nexus_files, cli::kOptNexusFiles, 0, ""},
     {"nexus/download", "nexus download", &cli::run_nexus_download, cli::kOptNexusDownload, 0, ""},
     {"skse/install", "skse install", &cli::run_skse_install, {}, 0, ""},
+    {"terminate", "terminate", &cli::run_terminate, cli::kOptTerminate, 0, ""},
+    {"fix/content-catalog", "fix content-catalog", &cli::run_fix_content_catalog, {}, 0, ""},
+    {"fix/vcrun", "fix vcrun", &cli::run_fix_vcrun, cli::kOptFixVcrun, 0, ""},
+    {"enb/install", "enb install", &cli::run_enb_install, cli::kOptEnbInstall, 0, ""},
     {"collection/inspect", "collection inspect", &cli::run_collection_inspect, cli::kOptCollectionInspect, 1, "COLLECTION"},
     {"collection/readme", "collection readme", &cli::run_collection_readme, cli::kOptCollectionInspect, 1, "COLLECTION"},
     {"collection/install", "collection install", &cli::run_collection_install, cli::kOptCollectionInstall, 1, "COLLECTION"},
@@ -78,6 +82,7 @@ inline constexpr RouteEntry kRoutes[] = {
 //   read      只读（可能读网络）        instance  写实例目录（mods/profiles/downloads/overwrite/配置）
 //   farm      改农场目录                 prefix    写用户的 Wine 前缀（含 plugins.txt 链接）
 //   game_dir  写真实游戏目录             launch    启动游戏进程
+//   kill      结束进程
 //   network   访问 Nexus/互联网
 // needs：nexus_key = 需要 Nexus API key；host = 需要 libmo-game.so；instance = 需要已有实例。
 // confirm：Agent 在执行前应当向用户确认（启动游戏、不可逆地改游戏目录等）。
@@ -135,6 +140,10 @@ inline constexpr CommandMeta kMeta[] = {
     {"nexus download", "Download a Nexus file into downloads/", "instance,network", "instance,nexus_key", false, true},
     {"nexus install", "Download and install a Nexus mod (optionally with requirements)", "instance,network", "instance,nexus_key", false, true},
     {"skse install", "Install the SKSE64 build that matches the game version", "instance,network", "instance,nexus_key,host", false, true},
+    {"terminate", "End every process using this instance (game, leftover Wine processes such as steam.exe steam://run, wineserver); fixes farm_busy/wine_busy", "kill", "instance", true, true},
+    {"fix content-catalog", "Move aside a ContentCatalog.txt the game version cannot parse (it is rebuilt on the next start)", "prefix", "instance", false, true},
+    {"fix vcrun", "Install the current VC++ 2015-2022 runtime into the prefix (needed by most SKSE plugins)", "prefix,network,launch", "instance", true, true},
+    {"enb install", "Install the ENB binaries (d3d11.dll, d3dcompiler_46e.dll) from an enbdev.com zip as a root-folder mod", "instance", "instance", false, true},
     {"wabbajack search", "Search the Wabbajack gallery (official repositories) for mod lists", "network", "", false, true},
     {"wabbajack inspect", "Analyse a mod list: sources, directive types and how much of it mo-linux can install", "network", "", false, true},
     {"wabbajack install", "Rebuild the mod list's instance in -i DIR; resumable, exit 4 when it needs input", "instance,network", "nexus_key", true, true},

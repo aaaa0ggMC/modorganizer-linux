@@ -18,8 +18,8 @@ std::string_view default_hint(std::string_view code) {
         {"invalid_argument", "see the command's options with `mo-linux schema`"},
         {"farm_not_owned", "the farm directory holds files mo-linux did not create; empty it or choose another farm_dir"},
         {"farm_conflict", "a real file sits where a link must go; run `mo-linux overwrite capture`, or remove the file"},
-        {"farm_busy", "the game is still running: ask the user to close it, then retry"},
-        {"wine_busy", "another Wine program in this prefix is still running (or just exited); wait a few seconds and retry, or close it. `--no-cow` runs without protection (writes change the original files)"},
+        {"farm_busy", "the game (or a leftover Wine process) is using the farm: ask the user to close the game, or run `mo-linux terminate` to end everything using this instance, then retry"},
+        {"wine_busy", "another Wine program in this prefix is still running (or just exited); wait a few seconds and retry, or end it with `mo-linux terminate`. `--no-cow` runs without protection (writes change the original files)"},
         {"io_error", "check the path named in the error (permissions, disk space)"},
         {"game_unavailable", "libmo-game.so was not found or failed to load: set MOL_GAME_LIB or build with MOL_BUILD_HOST=ON"},
         {"network_error", "check the network (set https_proxy if needed) and retry"},
@@ -28,6 +28,7 @@ std::string_view default_hint(std::string_view code) {
         {"nexus_not_found", "check the id/slug with `nexus search` / `collection search`"},
         {"nexus_rate_limited", "wait before retrying (see the message); do not loop"},
         {"skse_mismatch", "the newest SKSE64 does not support this game version yet; wait for an update or ask the user to downgrade the game"},
+        {"prefix_unhealthy", "run `mo-linux doctor` and apply the fix it names (e.g. `fix vcrun`, `fix content-catalog`); `run --force` launches anyway"},
         {"fomod_choices_required", "run `mo-linux fomod inspect ARCHIVE`, decide the choices, then pass --fomod FILE (or --fomod-defaults / --no-fomod)"},
     };
     for (const auto& h : table)

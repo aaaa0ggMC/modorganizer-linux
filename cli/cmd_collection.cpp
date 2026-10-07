@@ -488,7 +488,7 @@ Result run_collection_status(Context& ctx) {
             std::string decision;
             if (const auto ot = st.overrides.find(key); ot != st.overrides.end()) {
                 const auto& o = ot->second;
-                decision = o.skip ? "skip" : o.has_choices ? "fomod_choices" : o.fomod_defaults ? "fomod_defaults" : !o.archive.empty() ? "archive" : "";
+                decision = o.skip ? "skip" : o.has_choices ? "fomod_choices" : o.fomod_defaults ? "fomod_defaults" : !o.archive.empty() ? "archive" : o.reinstall ? "reinstall" : "";
             }
             d.pending.push_back(CollectionPendingRow{P(key, ctx.mem), P(m.name, ctx.mem), P(m.kind.empty() ? "pending" : m.kind, ctx.mem), P(m.note, ctx.mem),
                                                      P(m.url, ctx.mem), P(have_archive ? m.archive : std::string(), ctx.mem), P(decision, ctx.mem)});
@@ -505,10 +505,11 @@ Result run_collection_resolve(Context& ctx) {
     const Ref ref = parse_ref(ctx.args.positionals.front(), inst);
     const std::string key(ctx.args.get("--mod", "", ctx.mem));
     if (key.empty()) return make_usage_error("collection resolve: --mod KEY is required", ctx);
-    const bool skip = ctx.args.get_bool("--skip", false), defaults = ctx.args.get_bool("--fomod-defaults", false);
+    const bool skip = ctx.args.get_bool("--skip", false), defaults = ctx.args.get_bool("--fomod-defaults", false),
+               reinstall = ctx.args.get_bool("--reinstall", false);
     const std::string fomod_file(ctx.args.get("--fomod", "", ctx.mem)), archive(ctx.args.get("--archive", "", ctx.mem)), nxm_s(ctx.args.get("--nxm", "", ctx.mem));
-    const int given = (skip ? 1 : 0) + (defaults ? 1 : 0) + (fomod_file.empty() ? 0 : 1) + (archive.empty() ? 0 : 1) + (nxm_s.empty() ? 0 : 1);
-    if (given != 1) return make_usage_error("collection resolve: give exactly one of --skip, --fomod, --fomod-defaults, --archive, --nxm", ctx);
+    const int given = (skip ? 1 : 0) + (defaults ? 1 : 0) + (fomod_file.empty() ? 0 : 1) + (archive.empty() ? 0 : 1) + (nxm_s.empty() ? 0 : 1) + (reinstall ? 1 : 0);
+    if (given != 1) return make_usage_error("collection resolve: give exactly one of --skip, --fomod, --fomod-defaults, --archive, --nxm, --reinstall", ctx);
 
     col::State st = col::load_state(inst, ref.slug);
     if (st.mods.find(key) == st.mods.end()) {
@@ -519,6 +520,7 @@ Result run_collection_resolve(Context& ctx) {
     col::Override& ov = st.overrides[key];
     std::string recorded, used_archive;
     if (skip) { ov = col::Override{}; ov.skip = true; recorded = "skip"; }
+    else if (reinstall) { ov.reinstall = true; ov.skip = false; recorded = "reinstall"; }
     else if (defaults) { ov.fomod_defaults = true; ov.skip = false; recorded = "fomod_defaults"; }
     else if (!fomod_file.empty()) {
         ov.choices = mol::fomod::parse_choices_json(read_file(fomod_file));

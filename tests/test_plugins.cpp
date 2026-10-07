@@ -6,6 +6,7 @@
 #include <fstream>
 
 #include "minitest.hpp"
+#include "mol/collection.hpp"
 #include "mol/plugins.hpp"
 
 namespace fs = std::filesystem;
@@ -190,4 +191,29 @@ TEST(missing_master_is_reported) {
     CHECK_EQ(issues.size(), std::size_t{1});
     CHECK_EQ(std::string(issues[0].master), std::string("Absent.esm"));
     CHECK_EQ(std::string(issues[0].kind), std::string("missing"));
+}
+
+TEST(collection_plugin_spec_with_duplicates_keeps_every_plugin) {
+    Tmp t;
+    const Instance inst = make(t);
+    make_plugin(t.dir / "game/Data/Skyrim.esm", 0x1, {});
+    put(t.dir / "game/SkyrimSE.exe", "x");
+    for (const char* n : {"A.esp", "B.esp", "C.esp", "D.esp"}) make_plugin(t.dir / "inst/mods/M" / n, 0, {"Skyrim.esm"});
+    put(t.dir / "inst/profiles/Default/modlist.txt", "+M\n");
+    // 真实集合（Constellations）的插件列表里有重复项
+    const auto c = collection::parse_collection(R"({"info":{"name":"C"},"mods":[],"plugins":[
+        {"name":"B.esp","enabled":true},{"name":"A.esp","enabled":true},{"name":"b.esp","enabled":true},
+        {"name":"C.esp","enabled":true},{"name":"A.esp","enabled":true},{"name":"D.esp","enabled":false}]})");
+    const std::vector<string> forced{string("Skyrim.esm")};
+    collection::apply_plugin_spec(inst, c, "Default", forced);
+    const auto l = load_plugins(inst, forced);
+    CHECK_EQ(l.rows.size(), std::size_t{5});
+    const std::string txt = [&] { std::ifstream in(t.dir / "inst/profiles/Default/plugins.txt"); return std::string((std::istreambuf_iterator<char>(in)), {}); }();
+    for (const char* n : {"*B.esp\n", "*A.esp\n", "*C.esp\n"}) {
+        CHECK(txt.find(n) != std::string::npos);
+        CHECK_EQ(txt.find(n), txt.rfind(n));  // 不重复
+    }
+    CHECK(txt.find("\nD.esp\n") != std::string::npos);  // 清单里禁用的保持禁用
+    CHECK(txt.find("*B.esp") < txt.find("*A.esp"));
+    CHECK(txt.find("*A.esp") < txt.find("*C.esp"));
 }

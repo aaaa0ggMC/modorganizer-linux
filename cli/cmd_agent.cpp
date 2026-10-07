@@ -73,7 +73,7 @@ Result run_schema(Context& ctx) {
     std::ptrdiff_t ei = 0;
     for (const char* code : {"instance_not_found", "config_invalid", "profile_not_found", "mod_not_found", "invalid_argument", "farm_not_owned", "farm_conflict",
                              "farm_busy", "wine_busy", "io_error", "game_unavailable", "network_error", "nexus_auth", "nexus_premium", "nexus_not_found", "nexus_rate_limited",
-                             "skse_mismatch", "fomod_choices_required"}) {
+                             "skse_mismatch", "fomod_choices_required", "prefix_unhealthy"}) {
         auto& e = errs[ei++];
         e["code"] = code;
         e["hint"] = default_hint(code);

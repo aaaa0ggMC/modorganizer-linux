@@ -46,3 +46,6 @@ stdout 只放结果，日志走 stderr；退出码 0 成功 / 1 一般错误 / 2
 - `fifo:P`  命名管道（不存在则创建，写端打开会阻塞到有读端；CLI 不负责删除）
 - `unix:P`  连接 GUI 监听的 unix domain socket
 最终结果仍只走 stdout 的 envelope；事件写失败（对端关闭）不应使命令失败，只静默停止发送。
+
+## 自动诊断与修复
+实战中遇到的疑难杂症（ContentCatalog 写坏、VC++ 运行库过旧、ENB 二进制缺失、压缩包布局异常……）的检测/修复计划见 [`PLAN-autofix.md`](PLAN-autofix.md)。

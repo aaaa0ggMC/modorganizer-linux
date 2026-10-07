@@ -52,6 +52,8 @@ vector<PromoteEntry> promote_overwrite(const Instance& inst, std::span<const std
 
 // 是否有进程在使用农场（命令行含农场路径——正斜杠或 Wine 的反斜杠形式——或 cwd 在农场内）。
 bool farm_in_use(const Instance& inst);
+// 占用农场的第一个进程："pid N: 命令行"；没有返回空。
+std::string farm_user(const Instance& inst);
 // farm_in_use → 抛 Error{farm_busy}。
 void require_farm_idle(const Instance& inst);
 

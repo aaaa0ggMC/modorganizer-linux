@@ -230,6 +230,27 @@ std::pmr::vector<std::pmr::string> render_text(const Result& r, mol::mr* mem) {
         }
         add(lines, std::to_string(adata::integer(r.data, "errors")) + " error(s), " +
                        std::to_string(adata::integer(r.data, "warnings")) + " warning(s)", mem);
+    } else if (cmd == "terminate") {
+        const bool dry = adata::boolean(r.data, "dry_run");
+        const alib6::AData* ps = adata::field(r.data, "processes");
+        const std::size_t n = ps == nullptr ? 0 : adata::size(*ps);
+        for (std::size_t i = 0; i < n; ++i) {
+            const alib6::AData* p = adata::at(*ps, i);
+            if (p == nullptr) continue;
+            add(lines, std::string(dry ? "would end " : "  ") + std::to_string(adata::integer(*p, "pid")) + "  [" + std::string(adata::str(*p, "reason")) + "] " +
+                           std::string(adata::str(*p, "command")), mem);
+        }
+        auto count = [&](const char* k) {
+            const alib6::AData* a = adata::field(r.data, k);
+            return a == nullptr ? std::size_t{0} : adata::size(*a);
+        };
+        if (n == 0) add(lines, "terminate: nothing is using this instance", mem);
+        else if (dry) add(lines, "terminate --dry-run: " + std::to_string(n) + " process(es)", mem);
+        else
+            add(lines, "terminate: " + std::to_string(count("terminated")) + " exited, " + std::to_string(count("killed")) + " killed, " + std::to_string(count("remaining")) +
+                           " still running" + (adata::boolean(r.data, "wineserver_killed") ? "; wineserver stopped" : ""), mem);
+    } else if (cmd == "fix content-catalog" || cmd == "fix vcrun" || cmd == "enb install") {
+        add(lines, cmd + ": " + S(r.data, "message"), mem);
     } else if (cmd == "plugins sync") {
         add(lines, std::string("plugins sync ") + (adata::boolean(r.data, "changed") ? "(changed)" : "(unchanged)"), mem);
     } else if (cmd == "instance init") {

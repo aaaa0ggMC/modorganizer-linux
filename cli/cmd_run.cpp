@@ -4,11 +4,13 @@
 // 退出后改过的副本收进 overwrite（Data/ 下）或 overwrite-root（根目录，作为最高层参与合并）。
 // 游戏层库（Qt）只在启动游戏本体时必需；其它工具（降级补丁、BodySlide……）没有它也能跑，只是不同步 plugins.txt。
 // 混用约束：所有 #include 在 import 之前（详见 cli/cmd_common.hpp 文件头）。
+#include <fstream>
 #include <optional>
 
 #include "mol/casefold.hpp"
 #include "mol/executables.hpp"
 #include "mol/game_host.hpp"
+#include "mol/health.hpp"
 #include "mol/instance.hpp"
 #include "mol/overwrite.hpp"
 #include "mol/plugins.hpp"
@@ -53,6 +55,29 @@ Result run_run(Context& ctx) {
         game.emplace(host->create(inst.cfg.game, inst.cfg.game_dir, inst.cfg.prefix, inst.cfg.prefix_user));
     } catch (const mol::Error& e) {
         if (is_game || e.code != "game_unavailable") throw;
+    }
+
+    // 启动前检查（docs/PLAN-autofix.md D8）：已知会让游戏闪退/插件大面积失效的前缀问题，先修再启动
+    if (is_game && !dry && !ctx.args.get_bool("--force", false)) {
+        namespace h = mol::health;
+        std::string why, fix;
+        if (inst.cfg.runner_kind == "proton" && !h::steam_client_running(inst.cfg.steam_root)) {
+            why = "the Steam client is not running: the game would fail SteamAPI_Init and ask Steam to start its own copy of the game (no mods, no copy-on-write)";
+            fix = "";
+        } else if (const auto rt = h::vc_runtime(inst); !h::vc_runtime_ok(rt)) {
+            why = "the prefix's VC++ runtime is " + (rt.front().version.empty() ? std::string("missing") : rt.front().version) + "; most SKSE plugins need 14.40+ and fail to load";
+            fix = "fix vcrun";
+        } else {
+            std::ifstream in(h::appdata_dir(inst) / "ContentCatalog.txt", std::ios::binary);
+            const std::string text((std::istreambuf_iterator<char>(in)), std::istreambuf_iterator<char>());
+            if (const auto bad = h::bad_catalog_versions(text); !bad.empty() && h::catalog_versions_harmful(game_info_string(ctx, inst, "version"))) {
+                why = "ContentCatalog.txt has entries this game version cannot parse (\"" + bad.front() + "\"); the game would exit a few seconds after start";
+                fix = "fix content-catalog";
+            }
+        }
+        if (!why.empty())
+            throw mol::Error("prefix_unhealthy", why + (fix.empty() ? std::string(": start Steam and wait until it is logged in, then run again (or `run --force`)")
+                                                                     : ": run `mo-linux " + fix + "` first (or `run --force`)"));
     }
 
     if (!dry) mol::require_farm_idle(inst);
