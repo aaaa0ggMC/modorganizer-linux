@@ -62,6 +62,14 @@
 - **后台子进程不再继承调用方的描述符**（`run --detach`/`--diagnose`、`steam -silent`）：stdout/stderr → `<实例>/logs/run-*.log` 或 `/dev/null`，stdin → `/dev/null`，`close_range(3, …)`。之前用管道读 mo-linux 输出的 GUI/Agent 会一直卡到游戏退出（诊断测试时实际撞上）。
 - `run --diagnose` 端到端第二次复现：崩溃后不等 CrashLogger 的 notepad，直接给出结论。
 
+## 第五轮：解压后文件的复用（2026-10-07 晚）
+用一个 68 mod 的小集合（Truly Essentials for AE 1.6.1170，与 Constellations 有 36 个完全相同的文件）实测：
+- **A27（bug）**：「已装的同一文件」只在**当前 profile 的 modlist** 里找 → 新 profile 一个都没复用，68 个全部重新解压，重复 799 MB。改为扫描 `mods/` 下全部目录（一个文件可有多份不同选择的安装）；预取阶段也跳过可复用的（不再先下载）。重跑：35 个直接复用，63 s → 23 s，只新建 33 个目录。
+- **reflink 复用（新）**：`collection install --reuse-from <别的实例>`：同文件同选择 → `FICLONE` 整个目录。新实例装同一集合：68/68 reflink，3 s，`btrfs filesystem du`：1.43 GiB 全部共享、0 B 独占。`collection verify --downloads …` 12/12 FOMOD mod 与重新安装的结果一致。
+- **去重（新）**：选择不同 / 版本不同而必须重装的，装完与同一 mod 的已有安装做 `FIDEDUPERANGE`（同路径同大小 → 内核比对）。
+- **工具生成的插件**：`FNIS.esp`（Pandora/Nemesis/FNIS）、`DynDOLOD.esp`、`Synthesis.esp`… 不当成「装坏了」，提示该跑的工具。
+- 之前 SESSION 文档里设想的「共享 mods sink」因此不需要了：btrfs 的 reflink 直接给了跨实例、跨版本的块级共享，各实例仍是独立的普通目录。
+
 ## 待做：新的 doctor 检查 + 修复
 
 ### D1 `game.content_catalog`：坏掉的 ContentCatalog.txt（clean 启动 ~8s 闪退）

@@ -687,3 +687,34 @@ TEST(verify_finds_fomod_mods_whose_files_no_longer_match_and_absent_plugins) {
         CHECK_EQ(v.mismatched[0].missing[0], std::string("textures/a.dds"));
     }
 }
+
+TEST(a_mod_installed_for_another_profile_is_reused_not_extracted_again) {
+    if (!have_zip()) return;
+    Tmp t;
+    put(t.dir / "src/p/SKSE/Plugins/x.dll", "D");
+    fs::create_directories(t.dir / "inst/downloads");
+    zip_dir(t.dir / "src/p", t.dir / "inst/downloads/p.zip");
+    const std::string md5 = md5_file((t.dir / "inst/downloads/p.zip").string());
+    const auto sz = fs::file_size(t.dir / "inst/downloads/p.zip");
+    auto coll = [&](const char* name, const char* tag) {
+        return parse_collection(std::string(R"({"info":{"name":")") + name + R"(","domainName":"skyrimspecialedition"},"mods":[{"name":"P","version":"1","optional":false,"source":{"type":"nexus","modId":7,"fileId":8,"fileSize":)" +
+                                std::to_string(sz) + R"(,"md5":")" + md5 + R"(","tag":")" + tag + R"("}}],"modRules":[]})");
+    };
+    Instance inst = tmp_instance(t.dir);
+    State a;
+    a.slug = "a";
+    CHECK(install_collection(inst, nullptr, coll("A", "ta"), a, {}, {}).complete());
+    // 另一个集合、另一个 profile：mods/ 是共享的，不应再装一份
+    State b;
+    b.slug = "b";
+    InstallOptions o;
+    o.profile = "Second";
+    const Report r = install_collection(inst, nullptr, coll("B", "tb"), b, o, {});
+    CHECK(r.complete());
+    CHECK_EQ(r.reused, std::size_t{1});
+    CHECK_EQ(b.mods["tb"].mod_dir, a.mods["ta"].mod_dir);
+    std::size_t dirs = 0;
+    for (const auto& e : fs::directory_iterator(t.dir / "inst/mods")) if (e.is_directory()) ++dirs;
+    CHECK_EQ(dirs, std::size_t{1});
+    CHECK(slurp(t.dir / "inst/profiles/Second/modlist.txt").find(a.mods["ta"].mod_dir) != std::string::npos);  // 进了第二个 profile 的 modlist
+}
