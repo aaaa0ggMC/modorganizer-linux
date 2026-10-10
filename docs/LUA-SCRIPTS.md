@@ -78,6 +78,11 @@ mods.list() -> {{name,enabled,exists,root,version,nexus_id,priority}, …}
 
 -- 部署
 farm.apply() -> {applied,changed,farm}      -- 农场被占用时抛错（与 `run` 同一保护）
+
+-- 安装后自检（WP-C）：刚装进实例的 mod 到底注入了什么、能碰什么
+impact.of(name) -> {mod,summary,packed_suspect,
+                    injections={{kind,path,loaded_by,reach},…},
+                    caps={writes_files,spawns_processes,network,registry,memory_patch,chain_loads,unknown}}
 ```
 
 `instance.create` 让**一个脚本从零装起一个游戏**：建实例 → 下载/解包 → 跑安装器 exe →

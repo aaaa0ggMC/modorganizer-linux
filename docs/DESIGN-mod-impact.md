@@ -127,9 +127,19 @@ SKSE 插件、代理 DLL、EXE 工具、Papyrus 分类正确；畸形 DLL 不炸
 验收：已知样本（EngineFixes=内存 patch、某 overlay=网络+代理 DLL、FNIS=离线）分类正确；
 `GetProcAddress`-only 的 DLL 被标为「能力面上限不可知」而不是误报为「什么都不做」。
 
-### WP-C（待做）：doctor 事实 + 脚本 API
+### WP-C（已落地）：doctor 事实 + 脚本 API
 `impact.*` 事实进 rules；`impact.of()` 进 Lua 脚本。
 验收：规则能在「代理 DLL 模组 + 崩溃」时给出**提示而非停用**；脚本能在安装后自检导出表。
+已落地：`ctx.impact` + 四条内置检查（`injection.proxy_dll` / `chain_dll` / `network` / `packed`，
+全部 `ok`/`warn` 且无 `fix`）+ 脚本侧 `impact.of(name)`。
+
+**实测踩到两坑**（都已修）：
+
+- rules 层只接受 `ok|warn|error` 三档，写 `info` 会让**整条规则**被折叠成 `lua.runtime`；
+  告知类一律用 `ok`。
+- `engine_dll` 最初把任何不在 `SKSE/Plugins/` 的 DLL 都算注入点，结果 2448 个 mod 的实例里
+  报出 553 个——绝大多数是 `Reqtificator/app/*.dll` 这类**随工具带的文件**，游戏根本不加载。
+  现在只有 mod 根、`Data/` 顶层、`Data/SKSE/` 下的 DLL 才算注入点，其余记 `other`/`none`。
 
 ## 6. 明确不做
 

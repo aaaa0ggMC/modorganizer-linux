@@ -40,6 +40,10 @@ return {
     --   game = 'skyrimse', game_version = '1.6.1170.0',
     --   facts = { ['preferences.allow_disable_mod'] = 'true', ... },  -- key=value（都是字符串）
     --   mods = { { name=, version=, enabled=, exists=, nexus_id= }, ... },  -- 1 起算的数组
+    --   impact = { { mod=, packed_suspect=, summary=,                 -- 启用且存在的 mod 的影响面
+    --                 injections = { {kind=,path=,loaded_by=,reach=}, ... },
+    --                 caps = {writes_files=,spawns_processes=,network=,registry=,
+    --                         memory_patch=,chain_loads=,unknown=} }, ... },
     -- }
     return {
       {
@@ -89,10 +93,20 @@ action = { type = 'disable_mod', name = '<精确的 mod 名>' }
 
 ## 内置检查与事实
 
-`rules/skyrim.lua` 检查 Get Lost 地图位置偏好、ENB `E5020 / fx_5_0` 与两组可选模式冲突。
-ENB 只报告证据，不自动修改配置。`enb.compiler_log` 来自前缀中的
+`rules/skyrim.lua` 检查 Get Lost 地图位置偏好、ENB `E5020 / fx_5_0`、两组可选模式冲突，
+以及四类**注入地点/能力面**告知（`injection.proxy_dll` / `injection.chain_dll` /
+`injection.network` / `injection.packed`）。ENB 只报告证据，不自动修改配置。
+`enb.compiler_log` 来自前缀中的
 `AppData/Local/KiLoader/SkyrimSE/Logs/KiENBExtender.log`，只读取最多 64 KiB；
 存在 SKSE 的 `skse64_loader.log` 启动标记且 ENB 日志不早于该标记时才提供此事实。
+
+`ctx.impact` 是 `mods impact` 同一套静态分析（见 [`DESIGN-mod-impact.md`](./DESIGN-mod-impact.md)）
+喂给规则的事实：每个**启用且存在**的 mod 一条，含注入地点（`skse_plugin` / `proxy_dll` /
+`engine_dll` / `exe_tool` / `papyrus` / `content` / `config` / `other`）、作用域
+（`game-process` / `all-processes` / `offline` / `game-logic` / `game-content` / `none`）
+与能力面（导入表归类，是**上界**）。收集带磁盘缓存（按 mod 目录 mtime 失效，
+`~/.cache/mo-linux/impact/`）：2400 个 mod 的实例第一次约 1 分钟，之后每次约 1 秒。
+四类注入检查**只告知、永不停用**（影响 ≠ 责任），也不给 `fix`。
 
 ## 偏好（`rules.ini`）
 
