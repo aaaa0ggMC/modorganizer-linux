@@ -3,11 +3,16 @@
 #include "mol/impact.hpp"
 
 #include <algorithm>
+#include <array>
+#include <cstdio>
+#include <cstdlib>
 #include <filesystem>
+#include <fstream>
 #include <set>
 
 #include "mol/casefold.hpp"
 #include "mol/error.hpp"
+#include "mol/xxh64.hpp"
 
 namespace mol::impact {
 namespace {
@@ -290,6 +295,145 @@ std::vector<ModImpact> analyze_mods(const Instance& inst, std::span<const string
     std::vector<ModImpact> out;
     out.reserve(mods.size());
     for (const auto& m : mods) out.push_back(analyze_mod(inst, m, mem));
+    return out;
+}
+
+// ---- 磁盘缓存 -----------------------------------------------------------------
+// 键 = xxh64(实例根 | mod 名 | 目录 mtime)。目录 mtime 变（增删文件）即失效；
+// 就地改文件内容不变 mtime——mod 目录的场景可接受（与 fomod 缓存同样的取舍）。
+namespace {
+
+std::string cache_root() {
+    const char* xdg = std::getenv("XDG_CACHE_HOME");
+    const char* home = std::getenv("HOME");
+    const std::string base = (xdg && *xdg) ? std::string(xdg) : (home ? std::string(home) : "/tmp") + "/.cache";
+    return base + "/mo-linux/impact";
+}
+
+std::uint64_t dir_stamp(const fs::path& dir) {
+    std::error_code ec;
+    const auto t = fs::last_write_time(dir, ec);
+    if (ec) return 0;
+    return static_cast<std::uint64_t>(t.time_since_epoch().count());
+}
+
+std::string cache_key(const Instance& inst, const std::string& mod, std::uint64_t stamp) {
+    std::string s(inst.root.data(), inst.root.size());
+    s.push_back('\n');
+    s += mod;
+    s.push_back('\n');
+    s += std::to_string(stamp);
+    char buf[17];
+    std::snprintf(buf, sizeof buf, "%016llx", static_cast<unsigned long long>(xxh64(s)));
+    return buf;
+}
+
+// 极简文本格式（缓存是性能优化，坏了大不了重算）：
+//   mol-impact v1\n<injection: kind|path|loaded_by|reach>\n...\n<caps bitmask>\n<packed 0|1>\n<summary>\n
+std::optional<ModImpact> cache_load(const fs::path& file) {
+    std::ifstream in(file, std::ios::binary);
+    if (!in) return std::nullopt;
+    std::string line;
+    if (!std::getline(in, line) || line != "mol-impact v1") return std::nullopt;
+    ModImpact m;
+    while (std::getline(in, line)) {
+        if (line.rfind("caps ", 0) == 0) {
+            const unsigned long long f = std::strtoull(line.c_str() + 5, nullptr, 10);
+            m.caps.writes_files = f & (1 << 0);
+            m.caps.spawns_processes = f & (1 << 1);
+            m.caps.network = f & (1 << 2);
+            m.caps.registry = f & (1 << 3);
+            m.caps.memory_patch = f & (1 << 4);
+            m.caps.chain_loads = f & (1 << 5);
+            m.caps.unknown = f & (1 << 6);
+            continue;
+        }
+        if (line.rfind("packed ", 0) == 0) {
+            m.packed_suspect = line.substr(7) == "1";
+            continue;
+        }
+        if (line.rfind("summary ", 0) == 0) {
+            m.summary = line.substr(8);
+            break;
+        }
+        // injection 行：kind|path|loaded_by|reach（最后一段到行尾）
+        std::array<std::string, 4> f{};
+        std::size_t at = 0;
+        for (std::size_t i = 0; i < 4; ++i) {
+            if (i == 3) {
+                f[3] = line.substr(at);
+                break;
+            }
+            const auto bar = line.find('|', at);
+            if (bar == std::string::npos) return std::nullopt;  // 畸形：整条作废
+            f[i] = line.substr(at, bar - at);
+            at = bar + 1;
+        }
+        if (f[3].empty()) return std::nullopt;
+        InjectionPoint p;
+        p.kind = f[0];
+        p.path = f[1];
+        p.loaded_by = f[2];
+        p.reach = f[3];
+        m.injections.push_back(std::move(p));
+    }
+    if (m.injections.empty() && m.summary.empty()) return std::nullopt;
+    return m;
+}
+
+void cache_store(const fs::path& file, const ModImpact& m) {
+    std::error_code ec;
+    fs::create_directories(file.parent_path(), ec);
+    std::ofstream out(file, std::ios::binary | std::ios::trunc);
+    if (!out) return;  // 缓存失败不影响结果
+    out << "mol-impact v1\n";
+    for (const auto& i : m.injections)
+        out << i.kind << '|' << i.path << '|' << i.loaded_by << '|' << i.reach << '\n';
+    unsigned long long f = 0;
+    f |= m.caps.writes_files ? (1 << 0) : 0;
+    f |= m.caps.spawns_processes ? (1 << 1) : 0;
+    f |= m.caps.network ? (1 << 2) : 0;
+    f |= m.caps.registry ? (1 << 3) : 0;
+    f |= m.caps.memory_patch ? (1 << 4) : 0;
+    f |= m.caps.chain_loads ? (1 << 5) : 0;
+    f |= m.caps.unknown ? (1 << 6) : 0;
+    out << "caps " << f << '\n';
+    out << "packed " << (m.packed_suspect ? 1 : 0) << '\n';
+    out << "summary " << m.summary << '\n';
+}
+
+}  // namespace
+
+std::vector<ModImpact> collect_impact(const Instance& inst, mr* mem) {
+    const mol::vector<ModInfo> mods = list_mods(inst, {}, mem);
+    std::vector<ModImpact> out;
+    out.reserve(mods.size());
+    std::error_code ec;
+    const fs::path cdir(cache_root());
+    for (const auto& m : mods) {
+        if (m.separator || !m.enabled || !m.exists || m.path.empty()) continue;
+        const std::string mod_path(m.path.data(), m.path.size());
+        const fs::path dir(mod_path);
+        if (!fs::is_directory(dir, ec)) continue;
+        const std::uint64_t stamp = dir_stamp(dir);
+        const std::string key = cache_key(inst, std::string(m.name.data(), m.name.size()), stamp);
+        const fs::path file = cdir / key;
+        if (stamp) {
+            if (auto hit = cache_load(file)) {
+                hit->mod = string(m.name, mem);
+                out.push_back(std::move(*hit));
+                continue;
+            }
+        }
+        ModImpact imp;
+        try {
+            imp = analyze_mod(inst, m.name, mem);
+        } catch (const std::exception&) {
+            continue;  // 单个 mod 失败不牵连整轮收集
+        }
+        if (stamp) cache_store(file, imp);
+        out.push_back(std::move(imp));
+    }
     return out;
 }
 

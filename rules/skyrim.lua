@@ -102,6 +102,60 @@ return {
       }
     end
 
+    -- (5) 注入地点与能力面（ctx.impact，由 C++ 静态分析 + 缓存提供）。
+    -- 只做「告知」，不做任何停用建议：影响 ≠ 责任。
+    local proxies, packed, chain, net_mods = {}, {}, {}, {}
+    for _, im in ipairs(ctx.impact or {}) do
+      local has_proxy, has_chain = false, false
+      for _, inj in ipairs(im.injections or {}) do
+        if inj.kind == "proxy_dll" then has_proxy = true end
+        if inj.kind == "engine_dll" then has_chain = true end
+      end
+      if has_chain then chain[#chain + 1] = im.mod end
+      if has_proxy then proxies[#proxies + 1] = im.mod end
+      if im.packed_suspect then packed[#packed + 1] = im.mod end
+      if im.caps and im.caps.network then net_mods[#net_mods + 1] = im.mod end
+    end
+    local function names(list)
+      if #list == 0 then return "" end
+      local s = list[1]
+      for i = 2, math.min(#list, 4) do s = s .. ", " .. list[i] end
+      if #list > 4 then s = s .. ", … (" .. (#list - 4) .. " more)" end
+      return s
+    end
+    if #proxies > 0 then
+      out[#out + 1] = {
+        id = "injection.proxy_dll",
+        level = "ok",
+        message = #proxies .. " mod(s) install a proxy DLL, which every process that loads the game EXE also loads: " .. names(proxies),
+        hint = "proxy DLLs (d3d11.dll, version.dll, winhttp.dll, …) run in the launcher and Steam overlay too; when something misbehaves outside the game, look here first",
+      }
+    end
+    if #chain > 0 then
+      out[#out + 1] = {
+        id = "injection.chain_dll",
+        level = "ok",
+        message = #chain .. " mod(s) ship a DLL outside SKSE/Plugins, so the engine or another plugin loads it: " .. names(chain),
+        hint = "these DLLs are chain-loaded at runtime; a mod can pull in code you did not explicitly install",
+      }
+    end
+    if #net_mods > 0 then
+      out[#out + 1] = {
+        id = "injection.network",
+        level = "ok",
+        message = #net_mods .. " mod(s) contain code that imports networking APIs: " .. names(net_mods),
+        hint = "this is an upper bound from the PE import table (dynamic resolution hides behavior); it does not mean the mod phones home",
+      }
+    end
+    if #packed > 0 then
+      out[#out + 1] = {
+        id = "injection.packed",
+        level = "warn",
+        message = #packed .. " mod(s) ship a DLL that cannot be analyzed statically (writable+executable section or no import table): " .. names(packed),
+        hint = "the capability profile of these DLLs is unknown, not empty; treat their import table as unreliable",
+      }
+    end
+
     return out
   end,
 }

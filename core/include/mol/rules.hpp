@@ -1,5 +1,6 @@
 #pragma once
 #include "mol/doctor.hpp"
+#include "mol/impact.hpp"
 #include <span>
 namespace mol::rules {
 struct Fact {
@@ -18,13 +19,15 @@ struct Context {
     string game, game_version;
     vector<Fact> facts;
     vector<ModInfo> mods;
+    std::vector<impact::ModImpact> impact;  // 启用且存在的 mod 的影响面（带缓存）；规则只读
     explicit Context(allocator_type a = {}) : game(a), game_version(a), facts(a), mods(a) {}
     explicit Context(mr *mem) : Context(allocator_type(mem)) {}
     Context(const Context &o, allocator_type a)
-        : game(o.game, a), game_version(o.game_version, a), facts(o.facts, a), mods(o.mods, a) {}
+        : game(o.game, a), game_version(o.game_version, a), facts(o.facts, a), mods(o.mods, a),
+          impact(o.impact) {}
     Context(Context &&o, allocator_type a)
         : game(std::move(o.game), a), game_version(std::move(o.game_version), a), facts(std::move(o.facts), a),
-          mods(std::move(o.mods), a) {}
+          mods(std::move(o.mods), a), impact(std::move(o.impact)) {}
     Context(const Context &) = default;
     Context(Context &&) = default;
     Context &operator=(const Context &) = default;

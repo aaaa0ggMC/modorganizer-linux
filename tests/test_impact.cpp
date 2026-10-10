@@ -3,6 +3,8 @@
 // 只测公共契约：mol/pe.hpp 的 parse、mol/impact.hpp 的分类与能力归类。
 #include <unistd.h>
 
+#include <cstdlib>
+
 #include <cstdint>
 #include <cstring>
 #include <memory>
@@ -390,6 +392,34 @@ TEST(impact_empty_and_missing_mods) {
         threw = e.code == "mod_not_found";
     }
     CHECK(threw);
+    std::error_code ec;
+    fs::remove_all(root, ec);
+}
+
+// 磁盘缓存：第二次收集走缓存，结果一致（大实例上这是 49s → 1s 的差别）
+TEST(collect_impact_uses_the_disk_cache) {
+    const std::string root = make_instance();
+    Tmp t;
+    const std::string mod = (fs::path(root) / "mods/Cached").string();
+    PeSpec spec;
+    spec.imports = {{"kernel32.dll", {"WriteFile"}}};
+    put(mod + "/Data/thing.dll", build_pe(spec));
+    enable_in_modlist(root, "Cached");
+    // 把缓存指到临时目录，不污染真实 HOME
+    const std::string cache = (t.dir / "cache").string();
+    setenv("XDG_CACHE_HOME", cache.c_str(), 1);
+    Instance inst = load_instance(root);
+    const auto first = impact::collect_impact(inst);
+    const auto second = impact::collect_impact(inst);
+    unsetenv("XDG_CACHE_HOME");
+    CHECK_EQ(first.size(), second.size());
+    CHECK_EQ(first.size(), std::size_t{1});
+    if (!first.empty() && !second.empty()) {
+        CHECK(first[0].caps.writes_files);
+        CHECK(second[0].caps.writes_files);     // 缓存带回能力面
+        CHECK_EQ(text(second[0].mod), std::string("Cached"));
+        CHECK_EQ(second[0].injections.size(), first[0].injections.size());
+    }
     std::error_code ec;
     fs::remove_all(root, ec);
 }

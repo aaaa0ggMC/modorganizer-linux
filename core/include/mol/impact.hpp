@@ -47,4 +47,9 @@ ModImpact analyze_mod(const Instance& inst, std::string_view mod, mr* mem = defa
 // 批量；顺序与入参一致。单个文件解析失败只降级该条目，不影响其它。
 std::vector<ModImpact> analyze_mods(const Instance& inst, std::span<const string> mods, mr* mem = default_mr());
 
+// rules/脚本用的事实收集：实例里**启用且存在**的 mod 各一条，顺序与 list_mods 一致。
+// 带磁盘缓存（按 mod 目录 mtime 失效，位置同 fomod 缓存）：大实例第一次全量跑，
+// 之后每个 mod 只花一次 stat。缓存读写失败静默降级为重新分析。
+std::vector<ModImpact> collect_impact(const Instance& inst, mr* mem = default_mr());
+
 }  // namespace mol::impact

@@ -44,6 +44,7 @@
 #include "lua_script_json.hpp"
 #include "mol/error.hpp"
 #include "mol/http.hpp"
+#include "mol/impact.hpp"
 #include "mol/mod_install.hpp"
 #include "mol/overwrite.hpp"
 #include "mol/runner.hpp"
@@ -1640,6 +1641,27 @@ class Sandbox {
                                      "changed", !plan.ops.empty(), "farm", std::string(inst_->farm_path));
     }
 
+    // WP-C：安装后自检——脚本刚装完的 mod 到底注入了什么、能碰什么
+    sol::table api_impact_of(const std::string& name) {
+        check_wall();
+        if (!inst_) fail("impact analysis needs an instance");
+        if (name.empty() || name.size() > 4096) fail("invalid mod name");
+        const auto m = impact::analyze_mod(*inst_, name);
+        sol::state_view lua(L_);
+        sol::table inj = lua.create_table();
+        int n = 0;
+        for (const auto& i : m.injections)
+            inj.set(++n, lua.create_table_with("kind", std::string(i.kind), "path", std::string(i.path),
+                                               "loaded_by", std::string(i.loaded_by),
+                                               "reach", std::string(i.reach)));
+        sol::table caps = lua.create_table_with(
+            "writes_files", m.caps.writes_files, "spawns_processes", m.caps.spawns_processes,
+            "network", m.caps.network, "registry", m.caps.registry, "memory_patch", m.caps.memory_patch,
+            "chain_loads", m.caps.chain_loads, "unknown", m.caps.unknown);
+        return lua.create_table_with("mod", std::string(m.mod), "summary", std::string(m.summary),
+                                     "packed_suspect", m.packed_suspect, "injections", inj, "caps", caps);
+    }
+
     void api_log(const std::string& msg) {
         if (msg.size() > 4096) fail("log line too long");
         log_line(msg);
@@ -1750,6 +1772,9 @@ class Sandbox {
         }
         if (sol::table t = table_for("farm")) {
             t.set_function("apply", [this](sol::this_state) { return api_farm_apply(); });
+        }
+        if (sol::table t = table_for("impact")) {
+            t.set_function("of", [this](sol::this_state, const std::string& name) { return api_impact_of(name); });
         }
 
         auto loaded = lua.load(text_, script_, sol::load_mode::text);

@@ -210,6 +210,45 @@ int context(lua_State *L) {
         lua_rawseti(L, -2, ++n);
     }
     lua_setfield(L, -2, "mods");
+    // impact：启用且存在的 mod 的影响面（数组）
+    lua_newtable(L);
+    {
+        int n = 0;
+        for (const auto& im : ctx->impact) {
+            lua_newtable(L);
+            auto field_s = [&](const char* k, std::string_view v) {
+                lua_pushlstring(L, v.data(), v.size());
+                lua_setfield(L, -2, k);
+            };
+            field_s("mod", std::string_view(im.mod.data(), im.mod.size()));
+            field_s("summary", std::string_view(im.summary.data(), im.summary.size()));
+            lua_pushboolean(L, im.packed_suspect);
+            lua_setfield(L, -2, "packed_suspect");
+            lua_newtable(L);
+            int k = 0;
+            for (const auto& i : im.injections) {
+                lua_newtable(L);
+                field_s("kind", i.kind);
+                field_s("path", i.path);
+                field_s("loaded_by", i.loaded_by);
+                field_s("reach", i.reach);
+                lua_rawseti(L, -2, ++k);
+            }
+            lua_setfield(L, -2, "injections");
+            lua_newtable(L);
+            const auto& c = im.caps;
+            lua_pushboolean(L, c.writes_files);       lua_setfield(L, -2, "writes_files");
+            lua_pushboolean(L, c.spawns_processes);   lua_setfield(L, -2, "spawns_processes");
+            lua_pushboolean(L, c.network);            lua_setfield(L, -2, "network");
+            lua_pushboolean(L, c.registry);           lua_setfield(L, -2, "registry");
+            lua_pushboolean(L, c.memory_patch);       lua_setfield(L, -2, "memory_patch");
+            lua_pushboolean(L, c.chain_loads);        lua_setfield(L, -2, "chain_loads");
+            lua_pushboolean(L, c.unknown);            lua_setfield(L, -2, "unknown");
+            lua_setfield(L, -2, "caps");
+            lua_rawseti(L, -2, ++n);
+        }
+    }
+    lua_setfield(L, -2, "impact");
     return 1;
 }
 void failure(vector<Check> &out, std::string_view name = {}) {

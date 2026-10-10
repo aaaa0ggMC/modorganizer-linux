@@ -9,6 +9,7 @@
 #include <string_view>
 #include <system_error>
 
+#include "mol/impact.hpp"
 #include "mol/instance.hpp"
 #include "mol/mo2fmt.hpp"
 
@@ -70,6 +71,11 @@ Context collect_context(const Instance& inst, std::string_view game_version, mr*
     ctx.game = string(inst.cfg.game, mem);
     ctx.game_version = string(game_version, mem);
     ctx.mods = list_mods(inst, {}, mem);
+    // 影响面事实（带磁盘缓存）。收集失败不能让体检整体失败：rules 没有 impact 也能跑。
+    try {
+        ctx.impact = impact::collect_impact(inst, mem);
+    } catch (const std::exception&) {
+    }
 
     // Player-facing preferences live in the profile's rules.ini [Preferences] section.
     // Ini::load returns an empty Ini when the file is absent, so a profile without a

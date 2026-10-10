@@ -758,3 +758,37 @@ TEST(wp2_install_staged_refuses_symlink_escape) {
     fs::remove_all(root, ec);
     fs::remove_all("/tmp/mol-script-test-wp2-secret", ec);
 }
+
+// 脚本里的 impact.of：安装后自检「我刚装的东西注入了什么」
+TEST(script_impact_of_reports_injection) {
+    const std::string inst_root = make_instance("impactof");
+    const std::string root = tmp_dir("impactof-root");
+    std::error_code ec;
+    fs::create_directories("/tmp/mol-script-test-impactof-secret", ec);
+    put_file("/tmp/mol-script-test-impactof-secret/x", "s");
+    // 一个带代理 DLL 的 mod
+    const std::string pe_lua =
+        "string.char(0x4d,0x5a) .. string.rep('\0',0x3a) .. string.char(0x40,0,0,0)"
+        " .. 'PE' .. string.char(0,0) .. string.char(0x64,0x86) .. string.rep('\0',0x100)";
+    put_file(fs::path(inst_root) / "mods/ENB/d3d11.dll", "x");  // 占位（内容不影响分类：按路径+文件名）
+    {
+        std::ofstream(fs::path(inst_root) / "profiles/Default/modlist.txt", std::ios::app) << "+ENB\n";
+    }
+    const std::string text2 = R"(
+        local m = impact.of('ENB')
+        assert(m.mod == 'ENB', m.mod)
+        local found = false
+        for _, i in ipairs(m.injections) do
+            if i.kind == 'proxy_dll' and i.reach == 'all-processes' then found = true end
+        end
+        assert(found, 'proxy_dll not reported')
+        state.set('summary', m.summary)
+    )";
+    const auto r = run_script(text2, root, {}, inst_root);
+    CHECK(r.ok);
+    if (!r.ok) std::fprintf(stderr, "  impact.of error: %s\n", r.error.c_str());
+    CHECK(r.state.count("summary") == 1);
+    fs::remove_all(inst_root, ec);
+    fs::remove_all(root, ec);
+    fs::remove_all("/tmp/mol-script-test-impactof-secret", ec);
+}
