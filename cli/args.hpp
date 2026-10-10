@@ -180,6 +180,25 @@ constexpr OptionSpec kOptInstanceDefault[] = {
 constexpr OptionSpec kOptConflicts[] = {
     {"mod", "", "--mod", "Only conflicts involving this mod", true},
 };
+constexpr OptionSpec kOptScriptRun[] = {
+    {"ns", "", "--ns", "HTTP namespace for this run (default script_<n>; names starting with '_' are reserved)", true},
+    {"port", "", "--port", "Port of the script HTTP service (default 27736; a free port is picked when busy)", true},
+    {"timeout", "", "--timeout", "Wall-clock limit for the whole script, minutes (default 60, max 1440)", true},
+    {"memory", "", "--memory", "Lua heap limit in MiB (default 32, max 128)", true},
+    {"root", "", "--root", "Virtual root directory (default <instance>/scripts/<script>.work)", true},
+    {"no-net", "", "--no-net", "Disable net.get / net.download", false},
+    {"deny-private", "", "--deny-private", "Also refuse URLs that point at loopback/private/link-local addresses", false},
+    {"local", "", "--local", "Run in this process instead of the background service", false},
+    {"dry-run", "", "--dry-run", "Use a throwaway virtual root; executables and network are disabled", false},
+    {"clean", "", "--clean", "Delete the virtual root before running", false},
+};
+constexpr OptionSpec kOptServe[] = {
+    {"port", "", "--port", "Port to listen on (default 27736)", true},
+    {"detach", "", "--detach", "Daemonize and return as soon as the service is up", false},
+    {"idle-timeout", "", "--idle-timeout", "Exit after this many idle seconds with no runs (default 600; 0 = never)", true},
+    {"socket", "", "--socket", "Control socket path (default $XDG_RUNTIME_DIR/mo-linux-<uid>/serve.sock)", true},
+    {"stop", "", "--stop", "Ask a running service to exit (after its current runs finish)", false},
+};
 
 // ---------------------------------------------------------------------------
 // 全局选项

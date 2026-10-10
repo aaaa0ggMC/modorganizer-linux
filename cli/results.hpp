@@ -680,6 +680,34 @@ struct RunData {
     std::pmr::vector<std::pmr::string> diagnosis;  // --diagnose：结论（一行一条）
 };
 
+// ---- script run / serve ------------------------------------------------------
+struct ScriptStateRow {
+    std::pmr::string key;
+    std::pmr::string value;
+};
+struct ScriptRunData {
+    std::pmr::string script;
+    std::pmr::string ns;      // HTTP namespace（/_mol/scripts/<ns> 可看运行态）
+    std::pmr::string mode;    // service | local
+    bool ok = false;
+    std::pmr::string error;
+    std::pmr::string root;    // 虚拟根目录（脚本能读写的唯一范围）
+    std::pmr::string http_url;
+    std::pmr::string token;   // 访问 http_url 所需的 token（Bearer / ?token=）
+    std::pmr::string landlock;  // v1 | unavailable | ""（未跑 exe 时为空）
+    std::uint64_t fs_ops = 0;
+    std::uint64_t proc_runs = 0;
+    std::uint64_t net_requests = 0;
+    std::pmr::vector<std::pmr::string> log;
+    std::pmr::vector<ScriptStateRow> state;
+};
+struct ServeData {
+    std::pmr::string socket;
+    std::pmr::string http;  // http://127.0.0.1:<port>
+    std::uint16_t port = 0;
+    bool detached = false;
+};
+
 // ---- plan / status / apply / unlink ---------------------------------------
 struct OpCounts {
     std::size_t mkdir = 0;

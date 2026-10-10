@@ -37,6 +37,29 @@ const alib6::AData* arr(const alib6::AData& d, std::string_view key) {
     return a && a->is_array() ? a : nullptr;
 }
 
+void render_script_run(const alib6::AData& d, std::pmr::vector<std::pmr::string>& lines, mol::mr* mem) {
+    const bool ok = adata::boolean(d, "ok");
+    add(lines, std::string("script ") + (ok ? "ok" : "FAILED") + ": " + S(d, "script"), mem);
+    add(lines, "  namespace: " + S(d, "ns") + " (" + S(d, "mode") + ")", mem);
+    add(lines, "  virtual root: " + S(d, "root"), mem);
+    if (const std::string url = S(d, "http_url"); !url.empty()) add(lines, "  state: " + url, mem);
+    if (const std::string ll = S(d, "landlock"); !ll.empty())
+        add(lines, "  exe containment (Landlock): " + ll, mem);
+    if (!ok) add(lines, "  error: " + S(d, "error"), mem);
+    if (const alib6::AData* log = adata::field(d, "log")) {
+        const std::size_t n = adata::size(*log);
+        const std::size_t shown = std::min<std::size_t>(n, 20);
+        for (std::size_t i = 0; i < shown; ++i)
+            if (const alib6::AData* l = adata::at(*log, i)) add(lines, "  | " + std::string(adata::str(*l, "")), mem);
+        if (n > shown) add(lines, "  | ... (" + std::to_string(n - shown) + " more)", mem);
+    }
+    if (const alib6::AData* st = adata::field(d, "state")) {
+        for (std::size_t i = 0, n = adata::size(*st); i < n; ++i)
+            if (const alib6::AData* s = adata::at(*st, i))
+                add(lines, "  state " + S(*s, "key") + " = " + S(*s, "value"), mem);
+    }
+}
+
 void render_instance_show(const alib6::AData& d, std::pmr::vector<std::pmr::string>& lines,
                           mol::mr* mem) {
     add(lines, "instance " + S(d, "root"), mem);
@@ -320,6 +343,13 @@ std::pmr::vector<std::pmr::string> render_text(const Result& r, mol::mr* mem) {
             mem);
     } else if (cmd == "conflicts") {
         render_conflicts(r.data, lines, mem);
+    } else if (cmd == "script run") {
+        render_script_run(r.data, lines, mem);
+    } else if (cmd == "serve") {
+        if (const std::string http = S(r.data, "http"); !http.empty())
+            add(lines, "serve: listening on " + http + " (control socket " + S(r.data, "socket") + ")", mem);
+        else
+            add(lines, "serve: asked the service on " + S(r.data, "socket") + " to stop", mem);
     } else if (cmd == "plan") {
         std::string line = "plan: " + std::to_string(adata::integer(r.data, "count")) + " op(s) [";
         if (const alib6::AData* counts = adata::field(r.data, "counts")) {
