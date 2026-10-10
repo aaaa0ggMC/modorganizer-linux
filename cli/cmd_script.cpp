@@ -120,14 +120,19 @@ Result run_script_run(Context& ctx) {
         std::filesystem::remove_all(opt.root, ec);
     }
 
-    // 实例：vroot 默认挂在实例下；proc.run 也要实例的 runner/prefix。
-    // --dry-run 一律用临时 vroot，不需要实例。
+    // 实例：vroot 默认挂在实例下；proc.run / mods.* / farm.* 也要实例。
+    // --dry-run 用临时 vroot，--no-instance 允许「脚本自己建实例」的从零安装流程。
     std::string instance_dir;
     try {
         const mol::Instance inst = mol::load_instance(ctx.instance_dir, ctx.profile_override(), ctx.mem);
         instance_dir = std::string(inst.root);
     } catch (const mol::Error&) {
-        if (!dry) throw;
+        if (!dry && !ctx.args.get_bool("--no-instance", false))
+            throw mol::Error("instance_not_found",
+                             "no instance here; run `instance init` first, or pass --no-instance for a "
+                             "script that creates its own instance (instance.create)");
+        if (ctx.globals && !ctx.globals->quiet)
+            std::fprintf(stderr, "script: no instance; the script must create one with instance.create\n");
     }
 
     auto say = [&ctx](const std::string& line) {

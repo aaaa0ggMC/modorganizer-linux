@@ -388,7 +388,18 @@ struct HttpServer::Impl {
         addr.sin_family = AF_INET;
         addr.sin_addr.s_addr = htonl(INADDR_LOOPBACK);  // 只绑回环
         addr.sin_port = htons(p);
-        if (::bind(listen_fd, reinterpret_cast<sockaddr*>(&addr), sizeof addr) != 0) {
+        int rc = ::bind(listen_fd, reinterpret_cast<sockaddr*>(&addr), sizeof addr);
+        if (rc != 0 && p != 0) {
+            // 约定端口被占用（多半是常驻 service 正拿着）：退回临时端口，不失败
+            ::close(listen_fd);
+            listen_fd = ::socket(AF_INET, SOCK_STREAM | SOCK_CLOEXEC, 0);
+            if (listen_fd < 0) throw Error("io_error", "cannot create the HTTP socket");
+            ::setsockopt(listen_fd, SOL_SOCKET, SO_REUSEADDR, &one, sizeof one);
+            addr.sin_port = 0;
+            p = 0;
+            rc = ::bind(listen_fd, reinterpret_cast<sockaddr*>(&addr), sizeof addr);
+        }
+        if (rc != 0) {
             const int e = errno;
             ::close(listen_fd);
             listen_fd = -1;

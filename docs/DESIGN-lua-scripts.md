@@ -304,13 +304,26 @@ HTTP server（`_mol` introspection + 每脚本 namespace + token）、常驻 `se
 - `std::string_view kv = r.query.substr(...)` 把视图绑到 `substr` 的**临时 string** 上 → 悬空
   （token 校验因此永远失败）。必须 `std::string_view(r.query).substr(...)`。
 
-### WP2：实例写 API（带预览与确认）
+### WP2（已落地）：实例写 API + 从零建实例
 
-`mods.install_archive` / `mods.install_staged`（vroot 目录 → `mods/<name>`，布局判定复用
-`install_archive` 的规则）/ `mods.enable|disable` / `farm.apply` / `instance.info`。
-每个动作先出 dry-run 计划（JSON），脚本或用户确认后才落盘；忙农场（`require_farm_idle`）与
-执行前重新验证照抄 `run` 的做法。验收：overlay 不改原文件；回滚恢复先前状态；
-脚本中途失败时已装部分可列举、可卸载。
+`instance.create` / `instance.info` / `mods.install_archive` / `mods.install_staged`
+（vroot 目录 → `mods/<name>`，布局判定复用 `install_archive` 的规则，新增
+`install_directory` primitive）/ `mods.enable|disable|list` / `farm.apply`。
+`--no-instance` 让脚本在没有实例时也能起跑，于是**一个脚本可以从零装一个游戏**：
+建实例 → 下载/解包 → 跑安装器 exe → `install_staged` → `farm.apply`。
+
+与 CLI 同权同校验（没有暗门）：`game_dir` 必须已存在、路径必须绝对、runner 只能是 proton/wine、
+农场忙（`require_farm_idle`）照抄 `run` 的保护、`--dry-run` 一律拒绝。
+同一实例的并发写按实例根串行（守护进程可能同时跑多个脚本）。
+
+**实现期踩到的坑**（第三条是安全漏洞，已修）：
+
+- `InitOptions` 持 `std::string_view`：`io.root = base + "/instance"` 绑到临时 string 上 → 悬空
+  （实例建到乱码路径）。必须先用局部 `std::string` 承接。
+- `std::filesystem::copy(recursive)` **会跟随符号链接**：`install_staged` 因此可能把 vroot 外的文件
+  内容复制进 mod。已在复制前对源树做 `validate_tree`（拒绝符号链接与越界条目），复制后再校验一次。
+- `fs.list()` 曾把 ENOTDIR（符号链接/非目录）当成「不存在」返回 nil，与「不跟随链接」的承诺不一致；
+  现在只有 ENOENT 返回 nil。
 
 ### WP3：exe 网络收紧（可选）
 

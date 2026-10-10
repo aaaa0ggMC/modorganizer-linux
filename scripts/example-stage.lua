@@ -1,12 +1,12 @@
 -- 示例安装脚本（scripts/example-stage.lua）：演示 mo-linux Lua 脚本能做什么、边界在哪里。
 -- 跑法：mo-linux script run scripts/example-stage.lua
---       （加 --dry-run 用临时虚拟根、不碰实例；加 --local 不进后台 service）
+--       （加 --dry-run 用临时虚拟根、禁用 exe/网络/实例写；加 --local 不进后台 service）
 --
--- 这个脚本完全离线、不起 exe，只演示：虚拟根里的文件 IO、state（可被 HTTP 查看/修改）、日志。
+-- 完全离线、不起 exe，演示：虚拟根里的文件 IO、state（可被 HTTP 查看/修改）、日志。
 -- 真实安装脚本的形态见 docs/LUA-SCRIPTS.md：net.download → archive.extract → proc.run(安装器 exe)
---   → 把成品整理回虚拟根，再由后续版本的 mods.* API 装进实例（首版不开放实例写 API）。
+--   → mods.install_staged 装成 mod → farm.apply 部署。
 
-local VERSION = 1
+local VERSION = 2
 
 log.info('example install script v' .. VERSION .. ' starting')
 

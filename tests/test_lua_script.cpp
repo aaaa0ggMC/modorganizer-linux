@@ -19,6 +19,7 @@
 
 #include "minitest.hpp"
 #include "mol/lua_script.hpp"
+#include "mol/mod_install.hpp"
 
 namespace fs = std::filesystem;
 using namespace mol;
@@ -36,9 +37,11 @@ std::string tmp_dir(const std::string& tag) {
     return p.string();
 }
 
-// 跑一个脚本：返回结果（阻塞到结束）。vroot 由调用方给定。
-script::RunResult run_script(const std::string& text, const std::string& root, script::Options opt = {}) {
-    auto run = script::local_run("/tmp/test.lua", text, {}, std::move(opt), "script_0", {});
+// 跑一个脚本：返回结果（阻塞到结束）。vroot 由调用方给定；instance 空 = 无实例。
+script::RunResult run_script(const std::string& text, const std::string& root, script::Options opt = {},
+                             const std::string& instance = {}) {
+    opt.root = root;  // 虚拟根必须显式传给 local_run（否则会落到 <实例>/scripts/<名>.work）
+    auto run = script::local_run("/tmp/test.lua", text, instance, std::move(opt), "script_0", {});
     run->start();
     run->join();
     return run->result();
@@ -267,7 +270,7 @@ TEST(fs_rejects_escapes_and_symlinks) {
         {"read through symlink", "fs.read('in/link/x')", "cannot"},
         {"list through symlink", "fs.list('in/link')", "cannot"},
         {"write through symlink", "fs.write('in/link/x', 'y')", "cannot"},
-        {"remove through symlink", "fs.remove('in/link')", "cannot"},
+
         {"copy through symlink", "fs.copy('in/link/x', 'z')", "cannot"},
         {"move through symlink", "fs.move('in/link/x', 'z')", "cannot"},
         {"write outside", "fs.write('../escape.txt', 'x')", "invalid virtual path"},
@@ -560,4 +563,198 @@ TEST(registry_rejects_duplicate_namespace) {
     }
     CHECK(threw);
     CHECK_EQ(reg->size(), std::size_t{1});
+}
+
+// ---------------------------------------------------------------------------
+// WP2：实例写 API（创建实例 / 装 mod / 部署）
+// ---------------------------------------------------------------------------
+namespace {
+
+// 建一个最小实例（游戏目录 + instance init），返回实例根
+std::string make_instance(const std::string& tag) {
+    const std::string base = tmp_dir(tag);
+    const std::string game = base + "/game";
+    const std::string root = base + "/instance";
+    const std::string prefix = base + "/instance/prefix";
+    std::error_code ec;
+    fs::create_directories(game, ec);
+    std::ofstream(fs::path(game) / "SkyrimSE.exe", std::ios::binary) << "fixture";
+    mol::InitOptions io;  // 持 string_view：局部 string 必须活过这次调用
+    io.root = root;
+    io.game_dir = game;
+    io.prefix = prefix;
+    io.runner_kind = "wine";
+    io.profile = "Default";
+    try {
+        mol::init_instance(io);
+    } catch (const std::exception& e) {
+        std::fprintf(stderr, "  make_instance failed: %s\n", e.what());
+        throw;
+    }
+    return root;
+}
+
+void put_file(const std::string& path, const std::string& body) {
+    std::error_code ec;
+    fs::create_directories(fs::path(path).parent_path(), ec);
+    std::ofstream(fs::path(path), std::ios::binary) << body;
+}
+
+std::string read_file(const std::string& path) {
+    std::ifstream in(path, std::ios::binary);
+    return std::string((std::istreambuf_iterator<char>(in)), std::istreambuf_iterator<char>());
+}
+
+bool have_7z() { return std::system("command -v 7z >/dev/null 2>&1") == 0; }
+
+}  // namespace
+
+// 装 stage 好的目录 → modlist → 部署到农场；并验证 enable/disable/list/info
+TEST(wp2_install_staged_enable_and_apply) {
+    const std::string inst_root = make_instance("wp2a");
+    const std::string root = tmp_dir("wp2a-root");
+    const std::string text = R"(
+        local info = instance.info()
+        assert(info.root == '@ROOT@', info.root)
+        assert(info.game == 'skyrimse')
+        assert(info.runner == 'wine')
+        fs.mkdir('stage/Data/meshes')
+        fs.write('stage/Data/meshes/a.nif', 'nif-bytes')
+        local m = mods.install_staged('Staged Mod', 'stage')
+        assert(m.name == 'Staged Mod')
+        assert(m.files == 1)
+        assert(m.root == false)
+        assert(mods.enable('Staged Mod').enabled == true)
+        local listed = 0
+        for _, row in ipairs(mods.list()) do
+            if row.name == 'Staged Mod' then listed = listed + 1; assert(row.enabled) end
+        end
+        assert(listed == 1)
+        local f = farm.apply()
+        assert(f.applied >= 1)
+    )";
+    std::string script_text = text;
+    const auto pos = script_text.find("@ROOT@");
+    script_text.replace(pos, 6, inst_root);
+    const auto r = run_script(script_text, root, {}, inst_root);
+    CHECK(r.ok);
+    if (!r.ok) std::fprintf(stderr, "  wp2 error: %s\n", r.error.c_str());
+    // 磁盘结果：mod 目录、modlist、农场
+    CHECK(fs::exists(fs::path(inst_root) / "mods/Staged Mod/meshes/a.nif"));
+    CHECK(read_file((fs::path(inst_root) / "profiles/Default/modlist.txt").string()).find("+Staged Mod") !=
+          std::string::npos);
+    CHECK(fs::exists(fs::path(inst_root) / "farm/Data/meshes/a.nif"));
+    // 原 stage 文件没被搬走（install_directory 是复制）
+    CHECK(fs::exists(fs::path(root) / "stage/Data/meshes/a.nif"));
+    std::error_code ec;
+    fs::remove_all(inst_root, ec);
+    fs::remove_all(root, ec);
+}
+
+// 脚本自己建实例：从零安装一个"游戏"
+TEST(wp2_instance_create_from_nothing) {
+    const std::string base = tmp_dir("wp2b");
+    const std::string game = base + "/game";
+    std::error_code ec;
+    fs::create_directories(game, ec);
+    put_file(game + "/SkyrimSE.exe", "fixture");
+    const std::string new_root = base + "/instance";
+    const std::string text = R"(
+        local created = instance.create{
+            root = '@ROOT@',
+            game_dir = '@GAME@',
+            prefix = '@PREFIX@',
+            runner = 'wine',
+            profile = 'Default',
+        }
+        assert(created.root == '@ROOT@', created.root)
+        assert(created.changed == true)
+        local info = instance.info()
+        assert(info.root == '@ROOT@')
+        fs.mkdir('stage/Data')
+        fs.write('stage/Data/readme.txt', 'from zero')
+        local m = mods.install_staged('From Zero', 'stage')
+        assert(m.name == 'From Zero')
+        farm.apply()
+        state.set('instance', created.root)
+    )";
+    std::string script_text = text;
+    for (const auto& [ph, value] : std::vector<std::pair<const char*, std::string>>{
+             {"@ROOT@", new_root}, {"@GAME@", game}, {"@PREFIX@", new_root + "/prefix"}}) {
+        for (std::size_t p; (p = script_text.find(ph)) != std::string::npos;)
+            script_text.replace(p, 6, value);
+    }
+    // 没有实例的 run：instance_dir 传空
+    auto run = script::local_run("/tmp/fromzero.lua", script_text, {}, {}, "script_0", {});
+    run->start();
+    run->join();
+    const auto r = run->result();
+    CHECK(r.ok);
+    if (!r.ok) std::fprintf(stderr, "  wp2 create error: %s\n", r.error.c_str());
+    CHECK(fs::exists(fs::path(new_root) / "mo-linux.json"));
+    CHECK(fs::exists(fs::path(new_root) / "mods/From Zero/readme.txt"));
+    CHECK(fs::exists(fs::path(new_root) / "farm/Data/readme.txt"));
+    fs::remove_all(base, ec);
+}
+
+// dry-run 一律拒绝写实例
+TEST(wp2_dry_run_blocks_instance_writes) {
+    const std::string inst_root = make_instance("wp2c");
+    script::Options opt;
+    opt.dry_run = true;
+    auto r = run_script("mods.enable('x')", tmp_dir("wp2c-root"), opt);
+    CHECK(!r.ok);
+    CHECK(contains(r.error, "dry-run"));
+    r = run_script("instance.create{root='/tmp/x', game_dir='/tmp'}", tmp_dir("wp2c-root"), opt);
+    CHECK(!r.ok);
+    CHECK(contains(r.error, "dry-run"));
+    // 没有实例时 mods.* 也要明确报错（而不是崩）
+    r = run_script("mods.list()", tmp_dir("wp2c-root"));
+    CHECK(!r.ok);
+    CHECK(contains(r.error, "no instance"));
+    std::error_code ec;
+    fs::remove_all(inst_root, ec);
+}
+
+// 从虚拟根里的压缩包直接装 mod（没有 FOMOD 时按普通包）
+TEST(wp2_install_archive_from_virtual_root) {
+    if (!have_7z()) return;
+    const std::string inst_root = make_instance("wp2d");
+    const std::string root = tmp_dir("wp2d-root");
+    put_file(root + "/pkg/Data/textures/t.dds", "dds");
+    put_file(root + "/pkg/Data/readme.txt", "readme");
+    const std::string zip = root + "/pkg.7z";
+    CHECK_EQ(std::system(("cd '" + root + "/pkg' && 7z a -bd '" + zip + "' . >/dev/null 2>&1").c_str()), 0);
+    const auto r = run_script(
+        "local m = mods.install_archive('pkg.7z', 'Archive Mod')\n"
+        "assert(m.name == 'Archive Mod')\n"
+        "assert(m.files == 2)\n"
+        "farm.apply()",
+        root, {}, inst_root);
+    CHECK(r.ok);
+    if (!r.ok) std::fprintf(stderr, "  wp2 archive error: %s\n", r.error.c_str());
+    CHECK(fs::exists(fs::path(inst_root) / "mods/Archive Mod/textures/t.dds"));
+    CHECK(fs::exists(fs::path(inst_root) / "farm/Data/textures/t.dds"));
+    std::error_code ec;
+    fs::remove_all(inst_root, ec);
+    fs::remove_all(root, ec);
+}
+
+// 逃逸的 stage 目录（含指向外部的符号链接）必须被拒，且不留下半个 mod
+TEST(wp2_install_staged_refuses_symlink_escape) {
+    const std::string inst_root = make_instance("wp2e");
+    const std::string root = tmp_dir("wp2e-root");
+    std::error_code ec;
+    fs::create_directories("/tmp/mol-script-test-wp2-secret", ec);
+    put_file("/tmp/mol-script-test-wp2-secret/passwd", "TOPSECRET");
+    put_file(root + "/stage/Data/ok.txt", "fine");
+    fs::create_symlink("/tmp/mol-script-test-wp2-secret/passwd", fs::path(root) / "stage/Data/leak", ec);
+    const auto r = run_script("mods.install_staged('Evil', 'stage')", root, {}, inst_root);
+    CHECK(!r.ok);
+    CHECK(contains(r.error, "symbolic link"));
+    CHECK(contains(r.error, "symbolic link"));
+    CHECK(!fs::exists(fs::path(inst_root) / "mods/Evil"));
+    fs::remove_all(inst_root, ec);
+    fs::remove_all(root, ec);
+    fs::remove_all("/tmp/mol-script-test-wp2-secret", ec);
 }

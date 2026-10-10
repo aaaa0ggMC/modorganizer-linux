@@ -13,14 +13,17 @@ mo-linux serve --stop                                    # 让它退出
 
 ## 首版承诺
 
-> 一个脚本及其拉起的 exe，**只能写「虚拟根目录」**（默认 `<实例>/scripts/<脚本名>.work`）和它跑安装器
+> 一个脚本及其拉起的 exe，**默认只能写「虚拟根目录」**（`<实例>/scripts/<脚本名>.work`）和它跑安装器
 > 所必需的 Wine 前缀。读可以读系统（exe 需要读 prefix/游戏数据/系统库），但 Lua 侧本身只能看见虚拟根。
-> 首版**不**开放任何写实例的 API（不装 mod、不改 modlist、不 apply 农场）。
+> WP2 起显式开放了实例写 API（`instance.create` / `mods.*` / `farm.apply`）——这些调用与对应的 CLI 命令
+> 同权同校验，`--dry-run` 下一律拒绝，同一实例的并发写由宿主串行化。
 
 - 不从 mod 压缩包、集合清单里自动执行 Lua——只有你显式 `script run` 的文件才会跑。
 - 没有 `io` / `os`(除 `clock`/`time`/`date`) / `package` / `debug` / `load` / `require` / `pcall`。
   `string` 只留安全子集（无 `match`/`gmatch`/`gsub`/`format`——原生 C 里跑，hook 断不掉）。
 - **失败即停**：宿主调用失败 = Lua 错误冒泡到顶层，整个脚本结束。脚本里没有 `pcall` 可以吞掉它。
+  脚本侧校验失败走 alib6 的 panic：用户看到的 error 形如 `invalid state key (lua_script.cpp:1415)`，
+  自带 file:line，排查不用猜。
 - 所有路径都是**虚拟路径**：相对、`/` 分隔、组件不能是 `.`/`..`、不允许 `\`、`:`、绝对路径。
   符号链接一律不跟随（脚本创建不了链接；归档解出的链接会被拒绝；exe 在虚拟根里造的链接也指不出去）。
 
@@ -60,7 +63,30 @@ state.get(key, default) -> value
 state.set(key, value) -> true    -- string/number/boolean
 state.delete(key) -> true
 state.keys() -> {keys...}
+
+-- 实例（WP2：写实例的 API；--dry-run 下一律拒绝）
+instance.create{root=…, game_dir=…, prefix=…, prefix_user=…, profile=…,
+                runner='proton'|'wine', proton_path=…, steam_root=…, game=…} -> {root,changed,game,profile}
+instance.info() -> {root,game,game_dir,prefix,profile,farm,mods,downloads,overwrite,runner}
+
+-- mod（同样受 dry-run 保护；同一实例的并发写由宿主串行化）
+mods.install_archive(vpath, name, {fomod='defaults'|'choices'|'raw', choices={…}, root=bool, replace=bool})
+    -> {name,path,root,files,fomod}
+mods.install_staged(name, vpath, {root=bool, replace=bool}) -> {name,path,root,files}
+mods.enable(name) / mods.disable(name) -> {name,enabled,changed}
+mods.list() -> {{name,enabled,exists,root,version,nexus_id,priority}, …}
+
+-- 部署
+farm.apply() -> {applied,changed,farm}      -- 农场被占用时抛错（与 `run` 同一保护）
 ```
+
+`instance.create` 让**一个脚本从零装起一个游戏**：建实例 → 下载/解包 → 跑安装器 exe →
+`install_staged` 装成 mod → `farm.apply` 部署。路径必须是绝对路径（这些 API 本来就写在虚拟根之外），
+`game_dir` 必须已存在；没有实例时用 `script run --no-instance` 起跑。
+
+装 mod 的布局规则与 `mods install` 完全一致：顶层只有 exe/dll → 根目录型；顶层有 `Data/` 且旁边只有
+说明文档 → `Data/` 的内容成为 mod 根；只有一个包装目录 → 剥掉。`install_staged` 是**复制**（不是移动），
+虚拟根里的原件不动；源目录里有符号链接或越界条目 → 明确拒绝，且不留下半个 mod。
 
 ### `proc.run` 的收容
 
@@ -137,18 +163,19 @@ GET /_mol/scripts/<ns>/log        -> 日志尾
 
 ## 边界与承诺
 
-- **只 staging，不安装**：首版脚本不能装 mod、不能 apply 农场。脚本把东西整理在虚拟根里，
-  安装动作留给后续带预览与确认的 `mods.*` API（DESIGN §WP2）或直接走 CLI。
+- **实例写 API 与 CLI 同权**：`instance.create` / `mods.*` / `farm.apply` 做的事就是
+  `instance init` / `mods install` / `apply` 做的事（同样的校验、同样的布局规则、同样的农场忙检查），
+  没有绕过 CLI 的暗门；`--dry-run` 下一律拒绝。
 - **不防「用户显式运行的恶意脚本」**：它就是以用户身份跑的；沙箱提高的是误操作与天真恶意脚本的门槛。
 - **老内核（< 5.13）不跑 exe**：没有 Landlock 就拒绝，不会假装安全（结果里 `landlock=unavailable`）。
 - **exe 能读系统**：它读不到的好处没有（它本就是用户身份），但写不出去。
 - **顺序确定**：`fs.list` 排序返回；state 按键排序序列化；不要依赖 `pairs` 顺序或随机数。
-
 ## 测试
 
 - `tests/test_lua_script.cpp`（`test_lua_script`）：路径文法、PE 检测、namespace 分配、
   虚拟根读写与逃逸拒绝、符号链接、写入/操作数/指令/内存/墙钟限额、state、自省（死循环行号不动）、
   dry-run、`proc.run` 校验、HTTP server（token / namespace / `_mol` / POST 改 state）、注册表唯一性。
 - `tests/check_script_cli.py`（离线 CLI 联调，需隔离 HOME 与 XDG_RUNTIME_DIR）：
-  `script run --local --dry-run` 跑示例脚本、逃逸被拒、`serve` 后台模式下 namespace/自省/HTTP state。
+  `script run --local --dry-run` 跑示例脚本、逃逸被拒、`serve` 后台模式下 namespace/自省/HTTP state、
+  `--no-instance` 从零建实例装 mod 部署、dry-run 拒绝实例写。
   运行：`HOME=/tmp/x XDG_RUNTIME_DIR=/tmp/y python3 tests/check_script_cli.py /path/to/mo-linux`。

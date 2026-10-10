@@ -186,10 +186,11 @@ constexpr OptionSpec kOptScriptRun[] = {
     {"timeout", "", "--timeout", "Wall-clock limit for the whole script, minutes (default 60, max 1440)", true},
     {"memory", "", "--memory", "Lua heap limit in MiB (default 32, max 128)", true},
     {"root", "", "--root", "Virtual root directory (default <instance>/scripts/<script>.work)", true},
+    {"no-instance", "", "--no-instance", "Run without an instance (for scripts that create their own with instance.create)", false},
     {"no-net", "", "--no-net", "Disable net.get / net.download", false},
     {"deny-private", "", "--deny-private", "Also refuse URLs that point at loopback/private/link-local addresses", false},
     {"local", "", "--local", "Run in this process instead of the background service", false},
-    {"dry-run", "", "--dry-run", "Use a throwaway virtual root; executables and network are disabled", false},
+    {"dry-run", "", "--dry-run", "Use a throwaway virtual root; executables, network and instance writes are disabled", false},
     {"clean", "", "--clean", "Delete the virtual root before running", false},
 };
 constexpr OptionSpec kOptServe[] = {

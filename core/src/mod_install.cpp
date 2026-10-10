@@ -553,8 +553,106 @@ InstallResult install_archive(const Instance& inst, std::string_view archive_s, 
     return res;
 }
 
-std::optional<fomod::Config> read_archive_fomod(const Instance& inst, std::string_view archive_s) {
-    const fs::path archive{std::string(archive_s)};
+// 把 src_dir 复制成 mods/<name>/（布局判定与 install_archive 完全相同，只是输入是目录）。
+InstallResult install_directory(const Instance& inst, std::string_view src_dir_s, const InstallOptions& opt, mr* mem) {
+    const std::string_view name_in = opt.name;
+    const std::string_view profile = opt.profile;
+    const fs::path src{std::string(src_dir_s)};
+    std::error_code ec;
+    if (!fs::is_directory(src, ec))
+        throw Error("invalid_argument", "source directory not found", src.string());
+
+    std::string name = sanitize(name_in.empty() ? src.filename().string() : std::string(name_in));
+    if (name.empty()) throw Error("invalid_argument", "empty mod name");
+    const fs::path mods{std::string(inst.mods_dir)};
+    const fs::path target = mods / name;
+    const bool replacing = opt.replace_existing && fs::is_directory(fs::symlink_status(target, ec));
+    bool listed = false;
+    for (const auto& m : list_mods(inst, profile, mem))
+        if (casefold(m.name) == casefold(name)) listed = true;
+    if (!opt.replace_existing) {
+        if (fs::exists(fs::symlink_status(target, ec)))
+            throw Error("invalid_argument", "mod directory already exists: " + name, target.string());
+        if (listed) throw Error("invalid_argument", "mod already exists in modlist: " + name);
+    }
+    fs::create_directories(mods, ec);
+
+    const fs::path tmp = mods / (".mol-extract-" + std::to_string(::getpid()));
+    fs::remove_all(tmp, ec);
+    fs::create_directories(tmp, ec);
+    InstallResult res(mem);
+    try {
+        validate_tree(src.string());  // 先查源：fs::copy(recursive) 会跟随符号链接，必须事前拒绝
+        fs::copy(src, tmp, fs::copy_options::recursive | fs::copy_options::overwrite_existing, ec);
+        if (ec) throw Error("io_error", "cannot copy the staged directory: " + ec.message(), src.string());
+        split_backslash_names(tmp);
+        validate_tree(tmp);
+        // 1) 去掉「只有一个顶层目录」的包装（规则同 install_archive）
+        for (int guard = 0; guard < 4; ++guard) {
+            auto kids = children(tmp);
+            if (kids.size() != 1 || !fs::is_directory(kids[0], ec)) break;
+            if (casefold(kids[0].filename().string()) == "data") break;
+            if (casefold(kids[0].filename().string()) == "fomod") break;
+            if (looks_like_data_root(tmp)) break;
+            const fs::path inner = kids[0];
+            const fs::path hop = tmp / ".mol-hop";
+            fs::rename(inner, hop, ec);
+            if (ec) throw Error("io_error", "rename failed: " + ec.message(), inner.string());
+            move_children_up(hop, tmp);
+            fs::remove(hop, ec);
+        }
+        // 2) 布局（同 install_archive）
+        bool root = opt.force_root || has_exe_or_dll(tmp);
+        if (!root) {
+            auto kids = children(tmp);
+            fs::path data;
+            for (const auto& k : kids)
+                if (fs::is_directory(k, ec) && casefold(k.filename().string()) == "data") data = k;
+            if (!data.empty() && (kids.size() == 1 || !looks_like_data_root(tmp))) {
+                const fs::path hop = tmp / ".mol-hop";
+                fs::rename(data, hop, ec);
+                move_children_up(hop, tmp);
+                fs::remove(hop, ec);
+            }
+        }
+        res.files = validate_tree(tmp);
+        if (res.files == 0)
+            throw Error("invalid_argument", "the staged directory contains no files", src.string());
+        if (replacing) {  // 新内容齐了才换掉旧目录
+            const fs::path old = mods / (".mol-old-" + std::to_string(::getpid()));
+            fs::remove_all(old, ec);
+            fs::rename(target, old, ec);
+            if (ec) throw Error("io_error", "cannot move the old mod directory aside: " + ec.message(), target.string());
+            fs::rename(tmp, target, ec);
+            if (ec) {
+                std::error_code e2;
+                fs::rename(old, target, e2);
+                throw Error("io_error", "cannot move staged files into place: " + ec.message(), target.string());
+            }
+            fs::remove_all(old, ec);
+        } else {
+            fs::rename(tmp, target, ec);
+            if (ec) throw Error("io_error", "cannot move staged files into place: " + ec.message(), target.string());
+        }
+        if (root) mark_mod_root(target.string(), true);
+        res.root = root;
+    } catch (...) {
+        fs::remove_all(tmp, ec);
+        throw;
+    }
+    res.name = string(name, mem);
+    res.path = string(target.string(), mem);
+    if (listed) return res;  // 原地替换：modlist 里已有
+    try {
+        add_mod(inst, name, true, profile);
+    } catch (...) {
+        fs::remove_all(target, ec);  // modlist 写失败：不留下没登记的目录
+        throw;
+    }
+    return res;
+}
+
+std::optional<fomod::Config> read_archive_fomod(const Instance& inst, std::string_view archive_s) {    const fs::path archive{std::string(archive_s)};
     std::error_code ec;
     if (!fs::is_regular_file(archive, ec)) throw Error("invalid_argument", "archive not found", archive.string());
     if (const fs::path cached = fomod_cache_path(archive); fs::is_regular_file(cached, ec)) {

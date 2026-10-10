@@ -69,6 +69,13 @@ InstallResult install_archive(const Instance& inst, std::string_view archive, co
 InstallResult install_archive(const Instance& inst, std::string_view archive, std::string_view name = {},
                               bool force_root = false, std::string_view profile = {}, mr* mem = default_mr());
 
+// 把**目录**（例如 Lua 脚本在虚拟根里 stage 好的成品）装成 mods/<name>/。
+// 语义与 install_archive 一致——剥掉多余的顶层目录、判定布局（根目录型 / Data 型 / 原样）、
+// 写 modlist（启用）——只是输入是目录而不是压缩包；源目录保持不动（跨文件系统时安全）。
+// 源目录不存在 / 含符号链接或越界条目 / 装出来是空的 → Error{invalid_argument}。
+InstallResult install_directory(const Instance& inst, std::string_view src_dir, const InstallOptions& opt,
+                                mr* mem = default_mr());
+
 // 这一层是不是游戏 Data 根（顶层有 meshes/、scripts/、*.esp …；规则同上游 SkyrimSEModDataChecker）。
 bool is_data_root_dir(std::string_view dir);
 

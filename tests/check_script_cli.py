@@ -63,7 +63,7 @@ with tempfile.TemporaryDirectory(prefix='mol-script-cli-', dir='/tmp') as tmp:
     assert Path(data['root']).is_dir()
     assert any('finished' in line for line in data['log']), data['log']
     states = {row['key']: row['value'] for row in data['state']}
-    assert states == {'phase': 'done', 'version': '1', 'files/staged': '2'}, states
+    assert states == {'phase': 'done', 'version': '2', 'files/staged': '2'}, states
     # dry-run 不碰实例：虚拟根是临时目录
     assert not (inst / 'scripts').exists()
 
@@ -133,5 +133,32 @@ with tempfile.TemporaryDirectory(prefix='mol-script-cli-', dir='/tmp') as tmp:
     finally:
         call('serve', '--stop')
 
+    # 4) WP2：脚本自己建实例 → 装 stage 好的 mod → 部署（一个脚本从零安装一个"游戏"）
+    zero = root / 'zero'
+    (zero / 'game').mkdir(parents=True)
+    (zero / 'game' / 'SkyrimSE.exe').write_bytes(b'fixture')
+    (root / 'fromzero.lua').write_text(
+        "local created = instance.create{root='" + str(zero / 'instance') + "',"
+        "game_dir='" + str(zero / 'game') + "',prefix='" + str(zero / 'instance' / 'prefix') + "',"
+        "runner='wine',profile='Default'}\n"
+        "fs.mkdir('stage/Data')\n"
+        "fs.write('stage/Data/readme.txt', 'from zero')\n"
+        "local m = mods.install_staged('From Zero', 'stage')\n"
+        "farm.apply()\n"
+        "state.set('instance', created.root)\n")
+    data = call('script', 'run', '--local', '--no-instance', root / 'fromzero.lua')
+    assert data['ok'] is True, data
+    assert (zero / 'instance' / 'mo-linux.json').exists()
+    # Data/ 顶层会被剥成 mod 根（mods/<name> 映射到 Data/）
+    assert (zero / 'instance' / 'mods/From Zero/readme.txt').exists()
+    assert (zero / 'instance' / 'farm/Data/readme.txt').exists()
+    assert {row['key']: row['value'] for row in data['state']} == {'instance': str(zero / 'instance')}
+
+    # 5) dry-run 拒绝一切实例写入（已建的实例不新增 mod）
+    before = sorted(p.name for p in (zero / 'instance' / 'mods').iterdir())
+    data = call('-i', inst, 'script', 'run', '--local', '--dry-run', root / 'fromzero.lua', code=1)
+    assert data['ok'] is False and 'dry-run' in data['error'], data
+    assert sorted(p.name for p in (zero / 'instance' / 'mods').iterdir()) == before
+
 print('Lua script CLI integration: local dry-run, escape refusal, service namespace/'
-      'introspection/state all passed')
+      'introspection/state, from-zero install all passed')

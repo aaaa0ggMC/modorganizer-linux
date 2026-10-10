@@ -1,9 +1,11 @@
 // Lua 安装脚本运行时：沙箱 + vroot（fd 式虚拟文件系统）+ Windows exe 执行（Landlock 收容）。
 // 安全模型见 docs/DESIGN-lua-scripts.md；对外 API 见 core/include/mol/lua_script.hpp。
 //
-// 本 TU 只用文本形式标准库头（不 import 模块，混用约束见 cli/cmd_common.hpp）。
-// 宿主调用失败一律抛 mol::Error：sol2（SOL_ALL_SAFETIES_ON）在 trampoline 里接住并转成 Lua 错误，
+// 混用约束：所有 #include 排在 import 之前（GCC 16 实测，见 cli/cmd_common.hpp）。
+// 宿主调用失败一律抛异常：sol2（SOL_ALL_SAFETIES_ON）在 trampoline 里接住并转成 Lua 错误，
 // 不会让 C++ 异常穿过 Lua 的 C 帧（脚本侧没有 pcall，失败即停，这是有意设计）。
+// 脚本侧的校验失败用 alib6 的 panicf：自动带 file:line + 调用栈，排查省事；
+// 文件系统/进程类的系统错误仍用 mol::Error（带稳定 code，CLI 要映射退出码）。
 #include "mol/lua_script.hpp"
 
 #include <fcntl.h>
@@ -43,8 +45,10 @@
 #include "mol/error.hpp"
 #include "mol/http.hpp"
 #include "mol/mod_install.hpp"
+#include "mol/overwrite.hpp"
 #include "mol/runner.hpp"
 
+import alib6;
 namespace mol::script {
 namespace {
 
@@ -444,7 +448,8 @@ std::optional<std::vector<std::string>> vfs_list(int base, const std::vector<std
     const auto p = open_parent(base, comps);
     const int fd = ::openat(p.fd.fd, p.leaf.c_str(), O_RDONLY | O_DIRECTORY | O_NOFOLLOW | O_CLOEXEC);
     if (fd < 0) {
-        if (errno == ENOENT || errno == ENOTDIR) return std::nullopt;
+        // 只有 ENOENT 是「不存在」；符号链接（ELOOP）与「不是目录」（ENOTDIR）都是明确拒绝
+        if (errno == ENOENT) return std::nullopt;
         throw Error("io_error", "cannot list '" + p.leaf + "': " + std::strerror(errno));
     }
     DIR* d = ::fdopendir(fd);  // 接管 fd
@@ -571,8 +576,7 @@ void vfs_move(int base, const std::vector<std::string>& src, const std::vector<s
 }
 
 // 解包后校验：拒绝符号链接与越界条目（与 mod_install 的 validate_tree 同语义）。
-std::size_t validate_tree(const std::string& dir) {
-    namespace fs = std::filesystem;
+std::size_t validate_tree(const std::string& dir) {    namespace fs = std::filesystem;
     std::error_code ec;
     const fs::path base = fs::weakly_canonical(fs::path(dir), ec);
     std::size_t files = 0;
@@ -756,12 +760,60 @@ void* lua_alloc(void* ud, void* ptr, std::size_t old, std::size_t size) {
     return p;
 }
 
+// alib6 panic 的消息是多行诊断块；用户看到的 error 字段压成一行，但保留 file:line。
+std::string compact_error(const std::exception& e) {
+    const std::string what = e.what();
+    std::string msg, src;
+    std::size_t pos = 0;
+    bool panic_shape = false;
+    while (pos < what.size()) {
+        std::size_t eol = what.find('\n', pos);
+        if (eol == std::string::npos) eol = what.size();
+        const std::string_view line(what.data() + pos, eol - pos);
+        if (line.starts_with("Message  : ")) {
+            msg = line.substr(std::strlen("Message  : "));
+            panic_shape = true;
+        } else if (line.starts_with("Source   : ") && panic_shape) {
+            src = line.substr(std::strlen("Source   : "));
+        } else if (panic_shape) {
+            break;  // Function/Stack 块：对用户没用
+        }
+        if (eol == what.size()) break;
+        pos = eol + 1;
+    }
+    if (!panic_shape || msg.empty()) return what;  // 不是 panic：原样
+    if (!src.empty()) {  // /abs/path/file.cpp:12:34 → file.cpp:12
+        const auto colon = src.rfind(':');
+        if (colon != std::string::npos && colon > 0) {
+            const auto prev = src.rfind(':', colon - 1);
+            if (prev != std::string::npos) {
+                const auto slash = src.rfind('/', prev);
+                const std::size_t from = slash == std::string::npos ? 0 : slash + 1;
+                src = src.substr(from, colon - from);
+            }
+        }
+        msg += " (" + src + ")";
+    }
+    return msg;
+}
+
 class Sandbox;
 
 Budget* budget_of(lua_State* L) { return *static_cast<Budget**>(lua_getextraspace(L)); }
 
 // 计数 hook：指令预算 + 墙钟 + 自省位置（行号每次、浅栈每 2048 tick）。
 // 只碰 Lua C API 和预先给定的 Position/mutex，不调 Sandbox（避免未完成类型）。
+// 实例写锁：同一实例的并发写操作（多个脚本同时装 mod）必须串行。
+// 按实例根给锁，只在整个写调用期间持有（不在 exe 运行期间持有）。
+std::mutex& instance_write_lock(const std::string& root) {
+    static std::mutex mu;
+    static std::map<std::string, std::unique_ptr<std::mutex>> locks;
+    std::lock_guard lk(mu);
+    auto& ptr = locks[root];
+    if (!ptr) ptr = std::make_unique<std::mutex>();
+    return *ptr;
+}
+
 void count_hook(lua_State* L, lua_Debug* ar) {
     auto* b = budget_of(L);
     if (b->exhausted || --b->ticks == 0) {
@@ -902,7 +954,7 @@ class Sandbox {
             std::lock_guard lk(mu_);
             if (st_.run_state == "running") st_.run_state = "failed";
             res.ok = false;
-            res.error = e.what();
+            res.error = compact_error(e);
             st_.error = res.error;
         }
         st_.finished_ms = now_ms();
@@ -941,7 +993,10 @@ class Sandbox {
 
   private:
     // ---- 运行期小工具 -------------------------------------------------------
-    [[noreturn]] static void fail(const std::string& msg) { throw Error("script_error", msg); }
+    // 脚本侧校验失败：alib6 panicf（宏转发字面量，自动带 file:line + 栈；
+    // ALIB6_FLAG_USE_EXCEPTIONS 开启时抛 std::runtime_error，sol2 的 trampoline 会接住转成 Lua 错误）。
+    // 必须是宏：panicf 的 PanicFormat 是 consteval 的，函数参数没法转发字面量。
+#define fail(...) ::alib6::panicf(__VA_ARGS__)
 
     void check_wall() {
         if (steady_clock::now() > budget_.deadline) fail("wall clock deadline exceeded");
@@ -1251,7 +1306,7 @@ class Sandbox {
                 for (auto&& kv : et) {
                     if (kv.second.get_type() != sol::type::string) fail("env values must be strings");
                     std::string k = kv.first.as<std::string>(), v = kv.second.as<std::string>();
-                    if (!env_key_ok(k)) fail("environment variable name is not allowed: " + k);
+                    if (!env_key_ok(k)) fail("environment variable name is not allowed: {}", k);
                     if (v.size() > 8192) fail("environment value too long");
                     env.emplace_back(std::move(k), std::move(v));
                     if (env.size() > 64) fail("too many environment variables");
@@ -1308,7 +1363,7 @@ class Sandbox {
             if (!prefix.empty()) menv.emplace_back("WINEPREFIX", prefix);
             if (!std::getenv("WINEDEBUG")) menv.emplace_back("WINEDEBUG", "-all");
         } else {
-            fail("unknown runner_kind: " + std::string(cfg.runner_kind));
+            fail("unknown runner_kind: {}", std::string(cfg.runner_kind));
         }
         for (auto& a : args) argv.push_back(a);
         for (auto& [k, v] : env) menv.emplace_back(k, v);  // 脚本 env（已过滤注入变量）
@@ -1327,7 +1382,7 @@ class Sandbox {
                 const auto canon = std::filesystem::weakly_canonical(prefix, ec2);
                 rules.emplace_back(ec2 ? prefix : canon.string(), kAbi1All);
             } else {
-                fail("the Wine prefix does not exist (" + prefix + "); run `mo-linux instance init` first");
+                fail("the Wine prefix does not exist ({}); run `mo-linux instance init` first", prefix);
             }
         }
         std::error_code ec;
@@ -1388,6 +1443,201 @@ class Sandbox {
         std::vector<std::string> keys;
         for (const auto& [k, v] : st_.state) keys.push_back(k);
         return to_lua_table(keys);
+    }
+
+    // ---- WP2：实例写 API（创建实例 / 装 mod / 部署） --------------------------
+    // 所有写操作：dry-run 一律拒绝；按实例根串行；op 自省照旧。
+    void wp2_checks() {
+        check_wall();
+        if (opt_.dry_run) fail("instance writes are disabled in --dry-run");
+        if (!inst_) fail("this run has no instance (script run needs one for instance writes)");
+    }
+
+    static std::string opt_string(const sol::table& t, const char* key) {
+        if (!t.valid()) return {};
+        const sol::object o = t.raw_get<sol::object>(key);
+        if (o.get_type() != sol::type::string) return {};
+        const std::string s = o.as<std::string>();
+        if (s.size() > 4096) fail("option value too long");
+        return s;
+    }
+    static bool opt_bool(const sol::table& t, const char* key, bool def) {
+        if (!t.valid()) return def;
+        const sol::object o = t.raw_get<sol::object>(key);
+        return o.is<bool>() ? o.as<bool>() : def;
+    }
+
+    sol::table api_instance_create(sol::object opts_obj) {
+        check_wall();
+        if (opt_.dry_run) fail("creating an instance is disabled in --dry-run");
+        const sol::table o = as_options(std::move(opts_obj));
+        // InitOptions 持 string_view：先用局部 string 承接，保证视图有效
+        const std::string root = opt_string(o, "root");
+        const std::string game_dir = opt_string(o, "game_dir");
+        const std::string prefix = opt_string(o, "prefix");
+        const std::string prefix_user = opt_string(o, "prefix_user");
+        const std::string profile = opt_string(o, "profile");
+        const std::string runner = opt_string(o, "runner");
+        const std::string proton_path = opt_string(o, "proton_path");
+        const std::string steam_root = opt_string(o, "steam_root");
+        const std::string game = opt_string(o, "game");
+        if (root.empty()) fail("instance.create needs a root");
+        if (game_dir.empty()) fail("instance.create needs game_dir (an existing game directory)");
+        if (root.size() > 4096 || game_dir.size() > 4096) fail("path too long");
+        for (const std::string* p : {&root, &game_dir, &prefix, &proton_path, &steam_root})
+            if (!p->empty() && p->front() != '/')
+                fail("instance paths must be absolute (this API writes outside the virtual root)");
+        if (!runner.empty() && runner != "proton" && runner != "wine")
+            fail("runner must be proton or wine");
+        if (runner == "proton" && proton_path.empty()) fail("runner 'proton' needs proton_path");
+        std::error_code ec;
+        if (!std::filesystem::is_directory(game_dir, ec))
+            fail("game_dir does not exist: {}", game_dir);
+        InitOptions io;
+        io.root = root;
+        io.game_dir = game_dir;
+        io.prefix = prefix;
+        io.prefix_user = prefix_user;
+        io.profile = profile;
+        io.runner_kind = runner;
+        io.proton_path = proton_path;
+        io.steam_root = steam_root;
+        io.game = game;
+        op_begin("instance.create", root);
+        std::lock_guard lk(instance_write_lock(root));
+        const bool changed = init_instance(io);
+        inst_.emplace(load_instance(root));  // 之后 mods/farm API 都指向新实例
+        instance_dir_ = std::string(inst_->root);
+        st_.instance = instance_dir_;
+        op_end();
+        sol::state_view lua(L_);
+        return lua.create_table_with("root", std::string(inst_->root), "changed", changed,
+                                     "game", std::string(inst_->cfg.game),
+                                     "profile", std::string(inst_->cfg.profile));
+    }
+
+    sol::table api_instance_info() {
+        check_wall();
+        if (!inst_) fail("this run has no instance");
+        sol::state_view lua(L_);
+        return lua.create_table_with(
+            "root", std::string(inst_->root), "game", std::string(inst_->cfg.game),
+            "game_dir", std::string(inst_->cfg.game_dir), "prefix", std::string(inst_->cfg.prefix),
+            "profile", std::string(inst_->cfg.profile), "farm", std::string(inst_->farm_path),
+            "mods", std::string(inst_->mods_dir), "downloads", std::string(inst_->downloads_dir),
+            "overwrite", std::string(inst_->overwrite_dir), "runner", std::string(inst_->cfg.runner_kind));
+    }
+
+    fomod::Choices parse_choices(const sol::object& o) {
+        fomod::Choices out;
+        if (o.get_type() != sol::type::table) return out;
+        const sol::table steps = o.as<sol::table>();
+        for (auto&& s : steps) {
+            if (s.second.get_type() != sol::type::table) fail("choices must be step -> group -> {{plugins}}");
+            const std::string step = s.first.as<std::string>();
+            const sol::table groups = s.second.as<sol::table>();
+            for (auto&& g : groups) {
+                if (g.second.get_type() != sol::type::table)
+                    fail("choices must be step -> group -> {{plugins}}");
+                const std::string group = g.first.as<std::string>();
+                const sol::table plugins = g.second.as<sol::table>();
+                auto& slot = out[step][group];
+                for (auto&& p : plugins) {
+                    if (p.second.get_type() != sol::type::string) fail("plugin names must be strings");
+                    slot.insert(p.second.as<std::string>());
+                }
+            }
+        }
+        return out;
+    }
+
+    sol::table api_mods_install_archive(const std::string& vpath, const std::string& name, sol::object opts_obj) {
+        wp2_checks();
+        checked_vpath(vpath);
+        const sol::table o = as_options(std::move(opts_obj));
+        InstallOptions io;
+        io.name = name;
+        io.profile = inst_->cfg.profile;
+        io.force_root = opt_bool(o, "root", false);
+        io.replace_existing = opt_bool(o, "replace", false);
+        const std::string fomod = opt_string(o, "fomod");
+        if (fomod == "raw") io.fomod = FomodMode::Raw;
+        else if (fomod == "defaults") io.fomod = FomodMode::Defaults;
+        else if (fomod == "choices") {
+            io.fomod = FomodMode::Choices;
+            io.choices = parse_choices(o.valid() ? o.raw_get<sol::object>("choices") : sol::object());
+        } else if (!fomod.empty()) {
+            fail("fomod must be 'defaults', 'choices' or 'raw'");
+        }
+        op_begin("mods.install_archive", vpath + (name.empty() ? "" : " -> " + name));
+        std::lock_guard lk(instance_write_lock(std::string(inst_->root)));
+        const InstallResult r = install_archive(*inst_, vroot_path(vpath), io);
+        op_end();
+        sol::state_view lua(L_);
+        return lua.create_table_with("name", std::string(r.name), "path", std::string(r.path), "root", r.root,
+                                     "files", static_cast<std::int64_t>(r.files), "fomod", r.fomod);
+    }
+
+    sol::table api_mods_install_staged(const std::string& name, const std::string& vpath, sol::object opts_obj) {
+        wp2_checks();
+        checked_vpath(vpath);
+        if (name.empty()) fail("install_staged needs a mod name");
+        const sol::table o = as_options(std::move(opts_obj));
+        InstallOptions io;
+        io.name = name;
+        io.profile = inst_->cfg.profile;
+        io.force_root = opt_bool(o, "root", false);
+        io.replace_existing = opt_bool(o, "replace", false);
+        op_begin("mods.install_staged", vpath + " -> " + name);
+        std::lock_guard lk(instance_write_lock(std::string(inst_->root)));
+        const InstallResult r = install_directory(*inst_, vroot_path(vpath), io);
+        op_end();
+        sol::state_view lua(L_);
+        return lua.create_table_with("name", std::string(r.name), "path", std::string(r.path), "root", r.root,
+                                     "files", static_cast<std::int64_t>(r.files));
+    }
+
+    sol::table api_mods_set_enabled(const std::string& name, bool enabled) {
+        wp2_checks();
+        if (name.empty() || name.find('\n') != std::string::npos) fail("invalid mod name");
+        op_begin(enabled ? "mods.enable" : "mods.disable", name);
+        std::lock_guard lk(instance_write_lock(std::string(inst_->root)));
+        const bool changed = set_mod_enabled(*inst_, name, enabled, inst_->cfg.profile);
+        op_end();
+        sol::state_view lua(L_);
+        return lua.create_table_with("name", name, "enabled", enabled, "changed", changed);
+    }
+
+    sol::table api_mods_list() {
+        check_wall();
+        if (!inst_) fail("this run has no instance");
+        const auto mods = list_mods(*inst_, inst_->cfg.profile);
+        sol::state_view lua(L_);
+        sol::table out = lua.create_table();
+        int n = 0;
+        for (const auto& m : mods) {
+            if (m.separator) continue;
+            sol::table row = lua.create_table_with(
+                "name", std::string(m.name), "enabled", m.enabled, "exists", m.exists, "root", m.root,
+                "version", std::string(m.version), "nexus_id", static_cast<std::int64_t>(m.nexus_id),
+                "priority", static_cast<std::int64_t>(m.priority));
+            out.set(++n, row);
+        }
+        return out;
+    }
+
+    sol::table api_farm_apply() {
+        wp2_checks();
+        op_begin("farm.apply", std::string(inst_->farm_path));
+        std::lock_guard lk(instance_write_lock(std::string(inst_->root)));
+        mol::require_farm_idle(*inst_);
+        const FarmModel model = build_farm_model(*inst_, inst_->cfg.profile);
+        const Plan plan = plan_instance(*inst_, model);
+        apply_instance(*inst_, plan);
+        op_end();
+        sol::state_view lua(L_);
+        return lua.create_table_with("applied", static_cast<std::int64_t>(plan.ops.size()),
+                                     "changed", !plan.ops.empty(), "farm", std::string(inst_->farm_path));
     }
 
     void api_log(const std::string& msg) {
@@ -1486,6 +1736,20 @@ class Sandbox {
             t.set_function("set", [this](sol::this_state, const std::string& k, sol::object v) { api_state_set(k, std::move(v)); return true; });
             t.set_function("delete", [this](sol::this_state, const std::string& k) { api_state_delete(k); return true; });
             t.set_function("keys", [this](sol::this_state) { return api_state_keys(); });
+        }
+        if (sol::table t = table_for("instance")) {
+            t.set_function("create", [this](sol::this_state, sol::object o) { return api_instance_create(std::move(o)); });
+            t.set_function("info", [this](sol::this_state) { return api_instance_info(); });
+        }
+        if (sol::table t = table_for("mods")) {
+            t.set_function("install_archive", [this](sol::this_state, const std::string& p, const std::string& n, sol::object o) { return api_mods_install_archive(p, n, std::move(o)); });
+            t.set_function("install_staged", [this](sol::this_state, const std::string& n, const std::string& p, sol::object o) { return api_mods_install_staged(n, p, std::move(o)); });
+            t.set_function("enable", [this](sol::this_state, const std::string& n) { return api_mods_set_enabled(n, true); });
+            t.set_function("disable", [this](sol::this_state, const std::string& n) { return api_mods_set_enabled(n, false); });
+            t.set_function("list", [this](sol::this_state) { return api_mods_list(); });
+        }
+        if (sol::table t = table_for("farm")) {
+            t.set_function("apply", [this](sol::this_state) { return api_farm_apply(); });
         }
 
         auto loaded = lua.load(text_, script_, sol::load_mode::text);
