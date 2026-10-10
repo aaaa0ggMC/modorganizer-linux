@@ -227,6 +227,8 @@ mo-linux (CLI, GCC, C++26, alib6)            ← cli/
 
 ## 8. 构建与运行
 
+Lua 规则层需要 Lua 5.4 开发头与 `pkg-config lua5.4`；sol2 v3.3.0 头已随源码固定，运行时/扩展契约见 [LUA-RULES.md](docs/LUA-RULES.md)。
+
 依赖（Arch）：`cmake>=4.4 ninja gcc>=16 clang qt6-base qt6-declarative spdlog zlib lz4 nlohmann-json glm rapidjson tomlplusplus`；`~/Projs/aaaa0ggmcLib`（或 `-DMOL_ALIB6_DIR=`）；`third_party/uibase`、`third_party/game_bethesda` 需检出（目前是本地 clone，**尚未建 submodule/固定 commit**）。
 
 ```bash

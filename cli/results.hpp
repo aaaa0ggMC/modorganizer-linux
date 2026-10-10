@@ -20,6 +20,10 @@
 
 namespace cli {
 
+struct LuaGameData {
+    mol::string id, executable, data_directory, plugin_format;
+};
+
 // envelope 的 warnings/errors 条目
 struct Err {
     std::pmr::string code;

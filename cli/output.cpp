@@ -140,6 +140,9 @@ std::pmr::vector<std::pmr::string> render_text(const Result& r, mol::mr* mem) {
     const std::string cmd = std::string(r.command);
     if (cmd == "version") {
         add(lines, S(r.data, "name") + " " + S(r.data, "version"), mem);
+    } else if (cmd == "game describe") {
+        add(lines, S(r.data, "id") + ": " + S(r.data, "executable"), mem);
+        add(lines, "data " + S(r.data, "data_directory") + " (" + S(r.data, "plugin_format") + ")", mem);
     } else if (cmd == "game info") {
         add(lines, S(r.data, "name") + " " + S(r.data, "version"), mem);
         add(lines, "game " + S(r.data, "gameDirectory"), mem);

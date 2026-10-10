@@ -1,3 +1,4 @@
+#include "mol/rules.hpp"
 #include "mol/doctor.hpp"
 
 #include <filesystem>
@@ -319,6 +320,8 @@ vector<Check> run_doctor(const Instance& inst, std::string_view game_version, mr
     if (fs::is_symlink(st)) s.add("plugins.link", "ok", "plugins.txt is linked to the profile");
     else if (fs::exists(st)) s.add("plugins.link", "warn", "plugins.txt in the prefix is a real file, not linked to the profile", "run `plugins sync` (the file is kept as .mol-backup)", {"plugins", "sync"});
     else s.add("plugins.link", "warn", "plugins.txt is not linked yet", "run `plugins sync`", {"plugins", "sync"});
+    auto scripted = rules::run(inst, game_version, mem);
+    for (auto& check : scripted) out.push_back(std::move(check));
     return out;
 }
 

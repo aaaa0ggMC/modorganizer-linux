@@ -37,6 +37,7 @@
 - `status`  只读。data: `{"in_sync":bool,"pending":N,"farm_path":"…","farm_exists":bool}`；`in_sync:false` 时退出码 3。
 - `apply`  构建期望树并物化农场（空树首次创建 marker 时也返回 `changed:true`）；data: `{"applied":N,"changed":bool,"farm_path":"…"}`。发 `--events`。
 - `unlink`  删除农场（`remove_farm`）；data: `{"removed":bool,"farm_path":"…"}`；农场不存在 → `removed:false`（幂等，不是错误）。
+- `game describe LUA_FILE`  只读；在受限 Lua 运行时校验独立游戏描述，无需 MO2 host。data 为 `{id,executable,data_directory,plugin_format}`。示例：`mo-linux -j game describe games/generic-example.lua`。
 - `game info`  只读；从实例配置加载 `GameHost`（`MOL_GAME_LIB` 可指定库）。data 为游戏层原始信息对象：`{name,shortName,steamAppId,binaryName,launcherName,nexusGameId,gameDirectory,dataDirectory,documentsDirectory,savesDirectory,installed,looksValid,version,primaryPlugins,dlcPlugins,ccPlugins,iniFiles,variants,executables,scriptExtender}`。`executables` 是 `{title,binary,arguments,workingDirectory}` 数组，`scriptExtender` 是 `{name,loader,loaderPath,installed,version,savegameExtension}` 对象（游戏层可用时出现）。库缺失/加载失败/信息无效 → `game_unavailable`，退出 1；不初始化 profile、不启动游戏。
 - `version`  data: `{"name":"mo-linux","version":"0.0.1"}`
 - `docs [TOPIC]`  只读。构建时用 `#embed` 编进二进制的文档：不给 TOPIC 列出 `{topics:[{name,file,title,bytes}]}`；`docs guide|agent|cli|handbook|readme`（也接受 `GUIDE.md` 这类文件名）给出全文 `{topic,markdown}`，文本模式直接打印 Markdown。未知 TOPIC → `invalid_argument`（退出 2）。
@@ -145,3 +146,5 @@ mo-linux 不能在中途向用户提问，所以统一用「**可续跑 + 返回
 - 实例与游戏目录输出为绝对 Unix 路径，UTF-8；`plan.ops[].path` 与冲突 `path` 为相对农场根的路径，`plan.ops[].target` 为绝对源路径（无目标时为空）。
 - 变更命令在 `--json` 与文本模式下的行为一致，仅输出格式不同。
 - 文本模式：一行摘要 + 必要的列表，面向人；不保证稳定，GUI 不得解析。
+
+Lua 规则会追加到 `doctor` 与 `next` 的检查结果；扩展目录、规则 API 和 profile 偏好见 [LUA-RULES.md](LUA-RULES.md)。
