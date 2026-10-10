@@ -1,6 +1,6 @@
 # 提案：模组影响面分析（injection points → impact scope）
 
-状态：**提案**。动机：2026-10-10 用户问「能不能分析每个模组的注入地点，从而分析出它影响的范围」。
+状态：**WP-A + WP-B 已落地**（`mol::pe` + `mol::impact` + `mods impact` CLI + 10 个单测）；WP-C（doctor 事实 + 脚本 API）待做。动机：2026-10-10 用户问「能不能分析每个模组的注入地点，从而分析出它影响的范围」。
 这条线与审计文档里那条原则直接相接——**影响面 ≠ 责任**：知道一个模组*能*碰什么，
 不等于崩溃堆栈里出现它就有罪。本文只回答「能碰到什么」，永远不回答「谁是肇事者」。
 
@@ -117,17 +117,17 @@ SKSEPluginVersion」，或者「这个 mod 带代理 DLL，会影响所有进程
 
 ## 5. 分阶段与验收
 
-### WP-A（提案即本阶段）：PE primitive + 注入地点分类
+### WP-A（已落地）：PE primitive + 注入地点分类
 `mol::pe`（imports/exports/sections）+ 按路径/导出表分类注入地点 + `mods impact` CLI。
 验收：对一个真实实例（Constellations 的 2444 个 mod 里挑 30 个）跑出来：
 SKSE 插件、代理 DLL、EXE 工具、Papyrus 分类正确；畸形 DLL 不炸；全量 < 5s。
 
-### WP-B：能力面 + summary
+### WP-B（已落地）：能力面 + summary
 导入表归类成能力集 + 证据 + 一句人话 summary + `packed_suspect`。
 验收：已知样本（EngineFixes=内存 patch、某 overlay=网络+代理 DLL、FNIS=离线）分类正确；
 `GetProcAddress`-only 的 DLL 被标为「能力面上限不可知」而不是误报为「什么都不做」。
 
-### WP-C：doctor 事实 + 脚本 API
+### WP-C（待做）：doctor 事实 + 脚本 API
 `impact.*` 事实进 rules；`impact.of()` 进 Lua 脚本。
 验收：规则能在「代理 DLL 模组 + 崩溃」时给出**提示而非停用**；脚本能在安装后自检导出表。
 
@@ -136,3 +136,19 @@ SKSE 插件、代理 DLL、EXE 工具、Papyrus 分类正确；畸形 DLL 不炸
 - **不做动态追踪**：hook 目标、实际系统调用序列需要另一套机制（etrace/ptrace），不在本提案范围。
 - **不做「谁是肇事者」的自动判定**：见 §3.4，这是原则问题不是能力问题。
 - **不做脱壳/反混淆**：加壳 DLL 只标注「不可静态分析」，不尝试解开。
+
+## 7. 首次实战：Constellations 雪地闪烁（2026-10-10）
+
+用户报告雪地颜色闪烁（一下明亮到爆炸、一下与周围契合）。用 `mods impact` 逐层看：
+
+| 模组 | 注入地点 | 结论 |
+|---|---|---|
+| R.A.S.S. / Simplicity of Snow / Softly Obscuring Snowfall / Simple Snow Improvements | 全是 `content` + `config` | 无代码注入，改不出这种闪烁 |
+| **ENB Binaries (v0505)** | **`proxy_dll d3d11.dll` → all-processes**，caps: patch 内存/写文件/加载 DLL | 闪烁只可能出在这一层 |
+
+定位到有效 `enbseries.ini`（Constellations - Performance ENB Preset）的
+`[COMPLEXPARTICLELIGHTS] EnableComplexParticleLights=true` + `EnableBigRange=true`：
+ENB 把**每个雪花粒子当光源**且作用范围很大，落雪时粒子密度变化 → 整屏亮度爆闪。
+用独立根目录修复 mod 覆盖一个因素（`EnableBigRange` → false），不动预设 mod；
+若仍闪，下一步 `EnableComplexParticleLights` → false。这就是「影响面分析」的正确用法：
+缩小范围、定位层，然后一次只改一个因素。

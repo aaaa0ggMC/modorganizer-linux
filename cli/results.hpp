@@ -680,6 +680,31 @@ struct RunData {
     std::pmr::vector<std::pmr::string> diagnosis;  // --diagnose：结论（一行一条）
 };
 
+// ---- mods impact --------------------------------------------------------------
+struct ImpactInjectionRow {
+    std::pmr::string kind;        // skse_plugin|engine_dll|proxy_dll|exe_tool|papyrus|content|config
+    std::pmr::string path;        // 相对 mod 根
+    std::pmr::string loaded_by;   // skse|windows_loader|engine|user|game_vm|game
+    std::pmr::string reach;       // game-process|all-processes|offline|game-logic|game-content
+};
+struct ImpactCaps {
+    bool writes_files = false;
+    bool spawns_processes = false;
+    bool network = false;
+    bool registry = false;
+    bool memory_patch = false;
+    bool chain_loads = false;
+    bool unknown = false;
+};
+struct ImpactData {
+    std::pmr::string mod;
+    std::pmr::string summary;
+    bool packed_suspect = false;
+    std::pmr::vector<ImpactInjectionRow> injections;
+    ImpactCaps caps;
+    std::pmr::vector<std::pmr::string> evidence;
+};
+
 // ---- script run / serve ------------------------------------------------------
 struct ScriptStateRow {
     std::pmr::string key;

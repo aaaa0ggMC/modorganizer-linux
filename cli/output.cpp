@@ -345,6 +345,41 @@ std::pmr::vector<std::pmr::string> render_text(const Result& r, mol::mr* mem) {
         render_conflicts(r.data, lines, mem);
     } else if (cmd == "script run") {
         render_script_run(r.data, lines, mem);
+    } else if (cmd == "mods impact") {
+        add(lines, S(r.data, "mod") + ": " + S(r.data, "summary"), mem);
+        if (adata::boolean(r.data, "packed_suspect"))
+            add(lines, "  note: the DLL looks packed (writable+executable section or no imports); "
+                       "static analysis is an upper bound only",
+                mem);
+        if (const alib6::AData* inj = adata::field(r.data, "injections")) {
+            const std::size_t n = adata::size(*inj);
+            const std::size_t shown = std::min<std::size_t>(n, 24);
+            for (std::size_t i = 0; i < shown; ++i)
+                if (const alib6::AData* row = adata::at(*inj, i))
+                    add(lines, "  " + S(*row, "kind") + "  " + S(*row, "path") + "  (loaded by " +
+                                   S(*row, "loaded_by") + ", reach: " + S(*row, "reach") + ")",
+                        mem);
+            if (n > shown) add(lines, "  ... (" + std::to_string(n - shown) + " more)", mem);
+        }
+        std::string caps;
+        if (const alib6::AData* c = adata::field(r.data, "caps")) {
+            auto has = [&caps, c](const char* k, const char* label) {
+                if (adata::boolean(*c, k)) caps += (caps.empty() ? "" : ", ") + std::string(label);
+            };
+            has("writes_files", "writes files");
+            has("spawns_processes", "spawns processes");
+            has("network", "network");
+            has("registry", "registry");
+            has("memory_patch", "memory patch");
+            has("chain_loads", "loads DLLs");
+            has("unknown", "unknown");
+        }
+        if (caps.empty()) caps = "(no notable capabilities)";
+        add(lines, "  caps: " + caps, mem);
+        if (const alib6::AData* ev = adata::field(r.data, "evidence"))
+            for (std::size_t i = 0, n = std::min<std::size_t>(adata::size(*ev), 8); i < n; ++i)
+                if (const alib6::AData* e = adata::at(*ev, i))
+                    add(lines, "    " + std::string(adata::str(*e, "")), mem);
     } else if (cmd == "serve") {
         if (const std::string http = S(r.data, "http"); !http.empty())
             add(lines, "serve: listening on " + http + " (control socket " + S(r.data, "socket") + ")", mem);

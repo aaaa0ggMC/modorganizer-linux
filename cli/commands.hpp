@@ -60,6 +60,7 @@ Result run_collection_search(Context&);
 Result run_doctor_cmd(Context&);
 Result run_script_run(Context&);
 Result run_serve(Context&);
+Result run_mods_impact(Context&);
 Result run_overwrite_capture(Context&);
 Result run_overwrite_promote(Context&);
 Result run_instance_init(Context&);
